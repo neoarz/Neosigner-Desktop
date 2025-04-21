@@ -36,6 +36,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller pillow
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          
+          # Verify tkinter is available (it's part of standard library)
+          python -c "import tkinter; print('Tkinter is available, version:', tkinter.TkVersion)"
       
       - name: Clone zsign if needed
         run: |
@@ -148,7 +151,7 @@ jobs:
               pathex=[],
               binaries=[],
               datas=[('resources/', 'resources/')],
-              hiddenimports=[],
+              hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext'],
               hookspath=[],
               hooksconfig={},
               runtime_hooks=[],
