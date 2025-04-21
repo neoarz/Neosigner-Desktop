@@ -59,11 +59,21 @@ jobs:
           cd ../../..
           
           # Print where the binary is
-          find zsign -name zsign -type f
+          echo "Looking for zsign binary..."
+          find zsign -name zsign -type f -exec ls -la {} \;
           
           # Create bin directory and copy zsign
           mkdir -p bin
-          cp zsign/bin/zsign bin/
+          # Check if zsign is in zsign/bin
+          if [ -f "zsign/bin/zsign" ]; then
+            cp zsign/bin/zsign bin/
+          # Or if it's directly in the build directory
+          elif [ -f "zsign/build/macos/zsign" ]; then
+            cp zsign/build/macos/zsign bin/
+          else
+            echo "Error: zsign binary not found!"
+            exit 1
+          fi
           chmod +x bin/zsign
           
           # Verify that zsign works
@@ -71,18 +81,28 @@ jobs:
       
       - name: Create app bundle structure
         run: |
+          # First, make sure our resources directory exists
           mkdir -p resources/bin
+          
+          # Copy zsign to resources/bin
           cp bin/zsign resources/bin/
+          chmod +x resources/bin/zsign
           
           # Copy ideviceinstaller and dependencies
           IDEVICEINSTALLER_PATH=$(which ideviceinstaller)
-          cp "$IDEVICEINSTALLER_PATH" resources/bin/
+          if [ -n "$IDEVICEINSTALLER_PATH" ]; then
+            cp "$IDEVICEINSTALLER_PATH" resources/bin/
+            chmod +x resources/bin/ideviceinstaller
+          else
+            echo "Warning: ideviceinstaller not found"
+          fi
           
           # Copy libimobiledevice utilities
           for util in idevice_id ideviceinfo idevicename; do
             UTIL_PATH=$(which $util)
             if [ -n "$UTIL_PATH" ]; then
               cp "$UTIL_PATH" resources/bin/
+              chmod +x resources/bin/$util
             fi
           done
           
@@ -101,6 +121,10 @@ jobs:
               done
             fi
           done
+          
+          # List the resources/bin directory to verify
+          echo "Contents of resources/bin:"
+          ls -la resources/bin/
       
       - name: Create app launcher
         run: |
@@ -116,36 +140,63 @@ jobs:
           if getattr(sys, 'frozen', False):
               # Running as a bundled executable
               application_path = os.path.dirname(sys.executable)
-              # For Mac app bundles, need to go up a few levels to access resources
-              if os.path.exists(os.path.join(application_path, '..', 'Resources')):
-                  resources_path = os.path.abspath(os.path.join(application_path, '..', 'Resources'))
-                  bin_path = os.path.join(resources_path, 'bin')
-              else:
-                  resources_path = os.path.join(application_path, 'resources')
-                  bin_path = os.path.join(resources_path, 'bin')
+              # For Mac app bundles, resources should be in various possible locations
+              # List all possible bin paths in order of preference
+              possible_bin_paths = [
+                  os.path.join(application_path, 'bin'),                              # /Contents/MacOS/bin
+                  os.path.join(os.path.dirname(application_path), 'Resources', 'bin') # /Contents/Resources/bin
+              ]
+              
+              # Find the first valid bin path
+              bin_path = None
+              for path in possible_bin_paths:
+                  if os.path.exists(path) and os.path.isdir(path):
+                      bin_path = path
+                      break
           else:
               # Running as a script
               application_path = os.path.dirname(os.path.abspath(__file__))
-              resources_path = os.path.join(application_path, 'resources')
-              bin_path = os.path.join(resources_path, 'bin')
+              bin_path = os.path.join(application_path, 'resources', 'bin')
           
           print(f"Application path: {application_path}")
-          print(f"Resources path: {resources_path}")
-          print(f"Bin path: {bin_path}")
+          print(f"Selected bin path: {bin_path}")
           
           # Add bin directory to PATH
-          if os.path.exists(bin_path):
+          if bin_path and os.path.exists(bin_path):
               os.environ['PATH'] = f"{bin_path}:{os.environ.get('PATH', '')}"
               print(f"Added {bin_path} to PATH")
               
-              # Make sure binaries are executable
-              for binary in os.listdir(bin_path):
-                  binary_path = os.path.join(bin_path, binary)
-                  if os.path.isfile(binary_path) and not os.access(binary_path, os.X_OK):
-                      os.chmod(binary_path, 0o755)
-                      print(f"Made {binary_path} executable")
+              # Debug: List bin directory contents
+              print("Bin directory contents:")
+              try:
+                  for f in os.listdir(bin_path):
+                      file_path = os.path.join(bin_path, f)
+                      is_exec = os.access(file_path, os.X_OK)
+                      print(f"  {f} - Executable: {is_exec}")
+                  
+                  # Make sure binaries are executable
+                  for binary in os.listdir(bin_path):
+                      binary_path = os.path.join(bin_path, binary)
+                      if os.path.isfile(binary_path) and not os.access(binary_path, os.X_OK):
+                          os.chmod(binary_path, 0o755)
+                          print(f"Made {binary_path} executable")
+              except Exception as e:
+                  print(f"Error while accessing bin directory: {e}")
           else:
-              print(f"Warning: Bin path {bin_path} does not exist")
+              print(f"Warning: No valid bin path found!")
+              for path in possible_bin_paths:
+                  print(f"  Checked: {path} - Exists: {os.path.exists(path)}")
+              
+              # Try to give more diagnostic info
+              if getattr(sys, 'frozen', False):
+                  print("App bundle structure:")
+                  if os.path.exists(os.path.join(os.path.dirname(application_path), 'Resources')):
+                      resources_dir = os.path.join(os.path.dirname(application_path), 'Resources')
+                      print(f"Resources directory exists: {resources_dir}")
+                      try:
+                          print(f"Resources contents: {os.listdir(resources_dir)}")
+                      except Exception as e:
+                          print(f"Error listing Resources: {e}")
           
           # Import zsign_gui here to ensure PATH is set first
           try:
@@ -156,6 +207,29 @@ jobs:
               messagebox.showerror("Error", f"Failed to import zsign_gui: {e}")
               sys.exit(1)
           
+          # Check if zsign is available
+          try:
+              zsign_path = None
+              if bin_path:
+                  zsign_path = os.path.join(bin_path, "zsign")
+                  if os.path.exists(zsign_path):
+                      print(f"Found zsign at: {zsign_path}")
+                  else:
+                      print(f"zsign not found at expected path: {zsign_path}")
+              
+              # Try to run zsign to verify it works
+              result = subprocess.run(["zsign", "-v"], 
+                                      stdout=subprocess.PIPE, 
+                                      stderr=subprocess.PIPE, 
+                                      text=True,
+                                      env=os.environ)
+              print(f"zsign version check result: {result.returncode}")
+              print(f"zsign output: {result.stdout}")
+              if result.stderr:
+                  print(f"zsign stderr: {result.stderr}")
+          except Exception as e:
+              print(f"Error checking zsign: {e}")
+          
           # Launch the GUI
           if __name__ == "__main__":
               try:
@@ -164,10 +238,12 @@ jobs:
                   root.mainloop()
               except Exception as e:
                   print(f"Error launching app: {e}")
-                  if not root.winfo_exists():
-                      root = tk.Tk()
-                      root.withdraw()
-                  messagebox.showerror("Error", f"Failed to launch app: {e}")
+                  if 'root' in locals() and root.winfo_exists():
+                      messagebox.showerror("Error", f"Failed to launch app: {e}")
+                  else:
+                      tk_root = tk.Tk()
+                      tk_root.withdraw()
+                      messagebox.showerror("Error", f"Failed to launch app: {e}")
                   sys.exit(1)
           EOF
       
@@ -182,7 +258,10 @@ jobs:
               ['app_launcher.py'],
               pathex=[],
               binaries=[],
-              datas=[('resources', 'resources'), ('zsign_gui.py', '.')],
+              datas=[
+                  ('resources/bin', 'bin'),
+                  ('zsign_gui.py', '.'),
+              ],
               hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext'],
               hookspath=[],
               hooksconfig={},
@@ -240,10 +319,20 @@ jobs:
       - name: Verify app structure
         run: |
           echo "Checking app structure..."
-          find dist/iPASideloader.app -type f | grep -v "__pycache__" | sort
+          find dist/iPASideloader.app -type d | sort
           
-          echo "Checking if zsign is included and executable..."
-          ls -la dist/iPASideloader.app/Contents/MacOS/resources/bin/zsign
+          echo "Looking for zsign in the app bundle..."
+          find dist/iPASideloader.app -name zsign -type f | xargs ls -la || echo "zsign not found in app bundle"
+          
+          echo "Checking resources directory..."
+          ls -la dist/iPASideloader.app/Contents/Resources/resources/bin || echo "Resources/resources/bin not found"
+          ls -la dist/iPASideloader.app/Contents/MacOS/resources/bin || echo "MacOS/resources/bin not found"
+          
+          echo "Contents of app bundle:"
+          find dist/iPASideloader.app -type f -name "*.py" | sort
+          
+          echo "Checking if app launcher is properly included..."
+          cat dist/iPASideloader.app/Contents/MacOS/iPASideloader || echo "Could not find app launcher"
       
       - name: Create zip of app
         run: |
