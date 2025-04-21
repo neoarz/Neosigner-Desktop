@@ -38,7 +38,7 @@ cd iPASideloader
 ./setup.sh
 
 # Run the app
-python zsign_gui.py
+python3 zsign_gui.py
 ```
 
 ## Setting Up Dependencies
