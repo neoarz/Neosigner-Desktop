@@ -124,6 +124,8 @@ class ZsignGUI:
         if sys.platform == "darwin":
             # macOS
             paths = [
+                os.path.join(base_dir, "zsign_exe"),
+                os.path.join(base_dir, "zsign/bin/zsign"),
                 os.path.join(base_dir, "build", "macos", "zsign"),
                 os.path.join(base_dir, "zsign"),
                 "/usr/local/bin/zsign",
