@@ -31,7 +31,7 @@ A user-friendly GUI wrapper for zsign and ideviceinstaller, making iOS app sidel
 
 ```bash
 # Clone the repository
-git clone https://github.com/username/iPASideloader.git
+git clone https://github.com/neoarz/iPASideloader.git
 cd iPASideloader
 
 # Install dependencies
