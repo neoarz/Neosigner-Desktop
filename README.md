@@ -2,8 +2,6 @@
 
 A user-friendly GUI wrapper for zsign and ideviceinstaller, making iOS app sideloading simpler for everyone.
 
-![iPASideloader Screenshot](screenshots/main.png)
-
 ## Features
 
 - Simple drag-and-drop interface for IPA files
@@ -24,7 +22,7 @@ A user-friendly GUI wrapper for zsign and ideviceinstaller, making iOS app sidel
 
 ### Option 1: Download Release
 
-1. Download the latest release from the [Releases](https://github.com/yourusername/iPASideloader/releases) page
+1. Download the latest release from the [Releases](https://github.com/neoarz/iPASideloader/releases) page
 2. Extract the ZIP file
 3. Run the setup script to install dependencies: `./setup.sh`
 4. Launch the app: `python zsign_gui.py`
@@ -33,7 +31,7 @@ A user-friendly GUI wrapper for zsign and ideviceinstaller, making iOS app sidel
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/iPASideloader.git
+git clone https://github.com/username/iPASideloader.git
 cd iPASideloader
 
 # Install dependencies
@@ -66,11 +64,11 @@ brew install ideviceinstaller
 ## Usage
 
 1. **Launch iPASideloader**
-   - Run `python zsign_gui.py` in your terminal
+   - Run `python zsign_gui.py` in  terminal
 
 2. **Sign an IPA**
-   - Drag and drop your IPA file into the app
-   - Select your signing certificate and provisioning profile
+   - Drag and drop  IPA file into the app
+   - Select  signing certificate and provisioning profile
    - Adjust settings as needed (bundle ID, app name, etc.)
    - Click "Sign"
 
