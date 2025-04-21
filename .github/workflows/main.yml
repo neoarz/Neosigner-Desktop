@@ -58,10 +58,11 @@ jobs:
           make clean && make
           cd ../../..
           
-          # Create bin directory for our app
-          mkdir -p bin
+          # Print where the binary is
+          find zsign -name zsign -type f
           
-          # Copy the built zsign binary (from zsign/bin/zsign)
+          # Create bin directory and copy zsign
+          mkdir -p bin
           cp zsign/bin/zsign bin/
           chmod +x bin/zsign
           
@@ -84,6 +85,22 @@ jobs:
               cp "$UTIL_PATH" resources/bin/
             fi
           done
+          
+          # Copy shared libraries that these binaries depend on
+          for bin_file in resources/bin/*; do
+            if [ -f "$bin_file" ] && [ -x "$bin_file" ]; then
+              echo "Copying dependencies for $bin_file"
+              otool -L "$bin_file" | grep -v "/System" | grep -v "/usr/lib" | awk '{print $1}' | while read -r lib; do
+                if [[ "$lib" == *"/"* ]]; then
+                  lib_base=$(basename "$lib")
+                  echo "Copying $lib to resources/bin/$lib_base"
+                  cp "$lib" "resources/bin/$lib_base" || echo "Failed to copy $lib"
+                  # Fix the rpath in the binary
+                  install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" || echo "Failed to change path for $lib in $bin_file"
+                fi
+              done
+            fi
+          done
       
       - name: Create app launcher
         run: |
@@ -94,59 +111,67 @@ jobs:
           import subprocess
           import tkinter as tk
           from tkinter import messagebox
-          import zsign_gui
-
+          
           # Get the application path
           if getattr(sys, 'frozen', False):
+              # Running as a bundled executable
               application_path = os.path.dirname(sys.executable)
-          elif __file__:
+              # For Mac app bundles, need to go up a few levels to access resources
+              if os.path.exists(os.path.join(application_path, '..', 'Resources')):
+                  resources_path = os.path.abspath(os.path.join(application_path, '..', 'Resources'))
+                  bin_path = os.path.join(resources_path, 'bin')
+              else:
+                  resources_path = os.path.join(application_path, 'resources')
+                  bin_path = os.path.join(resources_path, 'bin')
+          else:
+              # Running as a script
               application_path = os.path.dirname(os.path.abspath(__file__))
-
+              resources_path = os.path.join(application_path, 'resources')
+              bin_path = os.path.join(resources_path, 'bin')
+          
+          print(f"Application path: {application_path}")
+          print(f"Resources path: {resources_path}")
+          print(f"Bin path: {bin_path}")
+          
           # Add bin directory to PATH
-          bin_path = os.path.join(application_path, 'resources', 'bin')
-          os.environ['PATH'] = f"{bin_path}:{os.environ.get('PATH', '')}"
-
-          # Make sure binaries are executable
-          for binary in os.listdir(bin_path):
-              binary_path = os.path.join(bin_path, binary)
-              if not os.access(binary_path, os.X_OK):
-                  os.chmod(binary_path, 0o755)
-
+          if os.path.exists(bin_path):
+              os.environ['PATH'] = f"{bin_path}:{os.environ.get('PATH', '')}"
+              print(f"Added {bin_path} to PATH")
+              
+              # Make sure binaries are executable
+              for binary in os.listdir(bin_path):
+                  binary_path = os.path.join(bin_path, binary)
+                  if os.path.isfile(binary_path) and not os.access(binary_path, os.X_OK):
+                      os.chmod(binary_path, 0o755)
+                      print(f"Made {binary_path} executable")
+          else:
+              print(f"Warning: Bin path {bin_path} does not exist")
+          
+          # Import zsign_gui here to ensure PATH is set first
+          try:
+              import zsign_gui
+          except ImportError as e:
+              print(f"Error importing zsign_gui: {e}")
+              tk.Tk().withdraw()
+              messagebox.showerror("Error", f"Failed to import zsign_gui: {e}")
+              sys.exit(1)
+          
           # Launch the GUI
           if __name__ == "__main__":
-              root = tk.Tk()
-              app = zsign_gui.ZsignGUI(root)
-              root.mainloop()
+              try:
+                  root = tk.Tk()
+                  app = zsign_gui.ZsignGUI(root)
+                  root.mainloop()
+              except Exception as e:
+                  print(f"Error launching app: {e}")
+                  if not root.winfo_exists():
+                      root = tk.Tk()
+                      root.withdraw()
+                  messagebox.showerror("Error", f"Failed to launch app: {e}")
+                  sys.exit(1)
           EOF
       
-      - name: Create app icon
-        run: |
-          # Create a simple icon for the app (optional - replace with a better one)
-          mkdir -p AppIcon.iconset
-          
-          # Create a colored square with text as the base icon
-          echo '<?xml version="1.0" encoding="UTF-8"?>
-          <svg width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
-            <rect width="1024" height="1024" fill="#007AFF"/>
-            <text x="512" y="620" font-family="Arial" font-size="500" text-anchor="middle" fill="white">iPA</text>
-          </svg>' > app_icon.svg
-          
-          # Convert SVG to PNG
-          brew install librsvg
-          for size in 16 32 64 128 256 512 1024; do
-            rsvg-convert -w $size -h $size app_icon.svg -o AppIcon.iconset/icon_${size}x${size}.png
-            
-            # Create @2x versions for retina display
-            if [ $size -le 512 ]; then
-              half_size=$((size / 2))
-              rsvg-convert -w $size -h $size app_icon.svg -o AppIcon.iconset/icon_${half_size}x${half_size}@2x.png
-            fi
-          done
-          
-          # Convert to icns
-          iconutil -c icns AppIcon.iconset
-      
-      - name: Create PyInstaller spec file
+      - name: Create simplified PyInstaller spec file
         run: |
           cat > iPASideloader.spec << EOF
           # -*- mode: python ; coding: utf-8 -*-
@@ -157,7 +182,7 @@ jobs:
               ['app_launcher.py'],
               pathex=[],
               binaries=[],
-              datas=[('resources/', 'resources/')],
+              datas=[('resources', 'resources'), ('zsign_gui.py', '.')],
               hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext'],
               hookspath=[],
               hooksconfig={},
@@ -180,13 +205,12 @@ jobs:
               bootloader_ignore_signals=False,
               strip=False,
               upx=True,
-              console=False,
+              console=True,  # Set to True for debugging
               disable_windowed_traceback=False,
               argv_emulation=True,
               target_arch=None,
               codesign_identity=None,
               entitlements_file=None,
-              icon='AppIcon.icns',
           )
           coll = COLLECT(
               exe,
@@ -201,13 +225,10 @@ jobs:
           app = BUNDLE(
               coll,
               name='iPASideloader.app',
-              icon='AppIcon.icns',
               bundle_identifier='com.neoarz.ipasideloader',
               info_plist={
                   'CFBundleShortVersionString': '1.0.0',
-                  'NSHighResolutionCapable': 'True',
-                  'NSRequiresAquaSystemAppearance': 'False',
-                  'LSEnvironment': {'PATH': '@executable_path/../Resources/resources/bin'}
+                  'NSHighResolutionCapable': 'True'
               },
           )
           EOF
@@ -216,19 +237,19 @@ jobs:
         run: |
           pyinstaller --clean iPASideloader.spec
       
-      - name: Create DMG
+      - name: Verify app structure
         run: |
-          create-dmg \
-            --volname "iPASideloader" \
-            --volicon "AppIcon.icns" \
-            --window-pos 200 120 \
-            --window-size 800 400 \
-            --icon-size 100 \
-            --icon "iPASideloader.app" 200 190 \
-            --hide-extension "iPASideloader.app" \
-            --app-drop-link 600 185 \
-            "iPASideloader.dmg" \
-            "dist/iPASideloader.app"
+          echo "Checking app structure..."
+          find dist/iPASideloader.app -type f | grep -v "__pycache__" | sort
+          
+          echo "Checking if zsign is included and executable..."
+          ls -la dist/iPASideloader.app/Contents/MacOS/resources/bin/zsign
+      
+      - name: Create zip of app
+        run: |
+          cd dist
+          zip -r iPASideloader.zip iPASideloader.app
+          cd ..
       
       - name: Get version from tag
         id: get_version
@@ -241,21 +262,21 @@ jobs:
             echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           fi
       
-      - name: Rename DMG
+      - name: Rename zip
         run: |
           VERSION=${{ steps.get_version.outputs.VERSION }}
-          mv iPASideloader.dmg "iPASideloader-$VERSION.dmg"
+          mv dist/iPASideloader.zip "iPASideloader-$VERSION.zip"
       
-      - name: Upload DMG as artifact
+      - name: Upload app as artifact
         uses: actions/upload-artifact@v4
         with:
           name: iPASideloader-${{ steps.get_version.outputs.VERSION }}
-          path: iPASideloader-${{ steps.get_version.outputs.VERSION }}.dmg
+          path: iPASideloader-${{ steps.get_version.outputs.VERSION }}.zip
       
       - name: Create Release and Upload Asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: iPASideloader-${{ steps.get_version.outputs.VERSION }}.dmg
+          files: iPASideloader-${{ steps.get_version.outputs.VERSION }}.zip
           draft: false
           prerelease: false 
