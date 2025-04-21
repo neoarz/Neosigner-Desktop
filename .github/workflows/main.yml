@@ -1,0 +1,371 @@
+name: Build macOS App
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write # Required for creating releases
+  packages: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          
+          # Verify tkinter is available (it's part of standard library)
+          python -c "import tkinter; print('Tkinter is available, version:', tkinter.TkVersion)"
+      
+      - name: Clone zsign if needed
+        run: |
+          if [ ! -d "zsign" ]; then
+            git clone https://github.com/zhlynn/zsign.git
+          fi
+      
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install pkg-config openssl@1.1 minizip
+          brew install libimobiledevice ideviceinstaller create-dmg
+      
+      - name: Build zsign
+        run: |
+          cd zsign/build/macos
+          make clean && make
+          cd ../../..
+          
+          # Print where the binary is
+          echo "Looking for zsign binary..."
+          find zsign -name zsign -type f -exec ls -la {} \;
+          
+          # Create bin directory and copy zsign
+          mkdir -p bin
+          # Check if zsign is in zsign/bin
+          if [ -f "zsign/bin/zsign" ]; then
+            cp zsign/bin/zsign bin/
+          # Or if it's directly in the build directory
+          elif [ -f "zsign/build/macos/zsign" ]; then
+            cp zsign/build/macos/zsign bin/
+          else
+            echo "Error: zsign binary not found!"
+            exit 1
+          fi
+          chmod +x bin/zsign
+          
+          # Verify that zsign works
+          bin/zsign -v
+      
+      - name: Create app bundle structure
+        run: |
+          # First, make sure our resources directory exists
+          mkdir -p resources/bin
+          
+          # Copy zsign to resources/bin
+          cp bin/zsign resources/bin/
+          chmod +x resources/bin/zsign
+          
+          # Copy ideviceinstaller and dependencies
+          IDEVICEINSTALLER_PATH=$(which ideviceinstaller)
+          if [ -n "$IDEVICEINSTALLER_PATH" ]; then
+            cp "$IDEVICEINSTALLER_PATH" resources/bin/
+            chmod +x resources/bin/ideviceinstaller
+          else
+            echo "Warning: ideviceinstaller not found"
+          fi
+          
+          # Copy libimobiledevice utilities
+          for util in idevice_id ideviceinfo idevicename; do
+            UTIL_PATH=$(which $util)
+            if [ -n "$UTIL_PATH" ]; then
+              cp "$UTIL_PATH" resources/bin/
+              chmod +x resources/bin/$util
+            fi
+          done
+          
+          # Copy shared libraries that these binaries depend on
+          for bin_file in resources/bin/*; do
+            if [ -f "$bin_file" ] && [ -x "$bin_file" ]; then
+              echo "Copying dependencies for $bin_file"
+              otool -L "$bin_file" | grep -v "/System" | grep -v "/usr/lib" | awk '{print $1}' | while read -r lib; do
+                if [[ "$lib" == *"/"* ]]; then
+                  lib_base=$(basename "$lib")
+                  echo "Copying $lib to resources/bin/$lib_base"
+                  cp "$lib" "resources/bin/$lib_base" || echo "Failed to copy $lib"
+                  # Fix the rpath in the binary
+                  install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" || echo "Failed to change path for $lib in $bin_file"
+                fi
+              done
+            fi
+          done
+          
+          # List the resources/bin directory to verify
+          echo "Contents of resources/bin:"
+          ls -la resources/bin/
+      
+      - name: Create app launcher
+        run: |
+          cat > app_launcher.py << 'EOF'
+          #!/usr/bin/env python3
+          import os
+          import sys
+          import subprocess
+          import tkinter as tk
+          from tkinter import messagebox
+          
+          # Get the application path
+          if getattr(sys, 'frozen', False):
+              # Running as a bundled executable
+              application_path = os.path.dirname(sys.executable)
+              # For Mac app bundles, resources should be in various possible locations
+              # List all possible bin paths in order of preference
+              possible_bin_paths = [
+                  os.path.join(application_path, 'bin'),                              # /Contents/MacOS/bin
+                  os.path.join(os.path.dirname(application_path), 'Resources', 'bin') # /Contents/Resources/bin
+              ]
+              
+              # Find the first valid bin path
+              bin_path = None
+              for path in possible_bin_paths:
+                  if os.path.exists(path) and os.path.isdir(path):
+                      bin_path = path
+                      break
+          else:
+              # Running as a script
+              application_path = os.path.dirname(os.path.abspath(__file__))
+              bin_path = os.path.join(application_path, 'resources', 'bin')
+          
+          print(f"Application path: {application_path}")
+          print(f"Selected bin path: {bin_path}")
+          
+          # Add bin directory to PATH
+          if bin_path and os.path.exists(bin_path):
+              os.environ['PATH'] = f"{bin_path}:{os.environ.get('PATH', '')}"
+              print(f"Added {bin_path} to PATH")
+              
+              # Debug: List bin directory contents
+              print("Bin directory contents:")
+              try:
+                  for f in os.listdir(bin_path):
+                      file_path = os.path.join(bin_path, f)
+                      is_exec = os.access(file_path, os.X_OK)
+                      print(f"  {f} - Executable: {is_exec}")
+                  
+                  # Make sure binaries are executable
+                  for binary in os.listdir(bin_path):
+                      binary_path = os.path.join(bin_path, binary)
+                      if os.path.isfile(binary_path) and not os.access(binary_path, os.X_OK):
+                          os.chmod(binary_path, 0o755)
+                          print(f"Made {binary_path} executable")
+              except Exception as e:
+                  print(f"Error while accessing bin directory: {e}")
+          else:
+              print(f"Warning: No valid bin path found!")
+              for path in possible_bin_paths:
+                  print(f"  Checked: {path} - Exists: {os.path.exists(path)}")
+              
+              # Try to give more diagnostic info
+              if getattr(sys, 'frozen', False):
+                  print("App bundle structure:")
+                  if os.path.exists(os.path.join(os.path.dirname(application_path), 'Resources')):
+                      resources_dir = os.path.join(os.path.dirname(application_path), 'Resources')
+                      print(f"Resources directory exists: {resources_dir}")
+                      try:
+                          print(f"Resources contents: {os.listdir(resources_dir)}")
+                      except Exception as e:
+                          print(f"Error listing Resources: {e}")
+          
+          # Import zsign_gui here to ensure PATH is set first
+          try:
+              import zsign_gui
+          except ImportError as e:
+              print(f"Error importing zsign_gui: {e}")
+              tk.Tk().withdraw()
+              messagebox.showerror("Error", f"Failed to import zsign_gui: {e}")
+              sys.exit(1)
+          
+          # Check if zsign is available
+          try:
+              zsign_path = None
+              if bin_path:
+                  zsign_path = os.path.join(bin_path, "zsign")
+                  if os.path.exists(zsign_path):
+                      print(f"Found zsign at: {zsign_path}")
+                  else:
+                      print(f"zsign not found at expected path: {zsign_path}")
+              
+              # Try to run zsign to verify it works
+              result = subprocess.run(["zsign", "-v"], 
+                                      stdout=subprocess.PIPE, 
+                                      stderr=subprocess.PIPE, 
+                                      text=True,
+                                      env=os.environ)
+              print(f"zsign version check result: {result.returncode}")
+              print(f"zsign output: {result.stdout}")
+              if result.stderr:
+                  print(f"zsign stderr: {result.stderr}")
+          except Exception as e:
+              print(f"Error checking zsign: {e}")
+          
+          # Launch the GUI
+          if __name__ == "__main__":
+              try:
+                  root = tk.Tk()
+                  app = zsign_gui.ZsignGUI(root)
+                  root.mainloop()
+              except Exception as e:
+                  print(f"Error launching app: {e}")
+                  if 'root' in locals() and root.winfo_exists():
+                      messagebox.showerror("Error", f"Failed to launch app: {e}")
+                  else:
+                      tk_root = tk.Tk()
+                      tk_root.withdraw()
+                      messagebox.showerror("Error", f"Failed to launch app: {e}")
+                  sys.exit(1)
+          EOF
+      
+      - name: Create simplified PyInstaller spec file
+        run: |
+          cat > iPASideloader.spec << EOF
+          # -*- mode: python ; coding: utf-8 -*-
+
+          block_cipher = None
+
+          a = Analysis(
+              ['app_launcher.py'],
+              pathex=[],
+              binaries=[],
+              datas=[
+                  ('resources/bin', 'bin'),
+                  ('zsign_gui.py', '.'),
+              ],
+              hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext'],
+              hookspath=[],
+              hooksconfig={},
+              runtime_hooks=[],
+              excludes=[],
+              win_no_prefer_redirects=False,
+              win_private_assemblies=False,
+              cipher=block_cipher,
+              noarchive=False,
+          )
+          pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+          exe = EXE(
+              pyz,
+              a.scripts,
+              [],
+              exclude_binaries=True,
+              name='iPASideloader',
+              debug=False,
+              bootloader_ignore_signals=False,
+              strip=False,
+              upx=True,
+              console=True,  # Set to True for debugging
+              disable_windowed_traceback=False,
+              argv_emulation=True,
+              target_arch=None,
+              codesign_identity=None,
+              entitlements_file=None,
+          )
+          coll = COLLECT(
+              exe,
+              a.binaries,
+              a.zipfiles,
+              a.datas,
+              strip=False,
+              upx=True,
+              upx_exclude=[],
+              name='iPASideloader',
+          )
+          app = BUNDLE(
+              coll,
+              name='iPASideloader.app',
+              bundle_identifier='com.neoarz.ipasideloader',
+              info_plist={
+                  'CFBundleShortVersionString': '1.0.0',
+                  'NSHighResolutionCapable': 'True'
+              },
+          )
+          EOF
+      
+      - name: Build macOS app
+        run: |
+          pyinstaller --clean iPASideloader.spec
+      
+      - name: Verify app structure
+        run: |
+          echo "Checking app structure..."
+          find dist/iPASideloader.app -type d | sort
+          
+          echo "Looking for zsign in the app bundle..."
+          find dist/iPASideloader.app -name zsign -type f | xargs ls -la || echo "zsign not found in app bundle"
+          
+          echo "Checking resources directory..."
+          ls -la dist/iPASideloader.app/Contents/Resources/resources/bin || echo "Resources/resources/bin not found"
+          ls -la dist/iPASideloader.app/Contents/MacOS/resources/bin || echo "MacOS/resources/bin not found"
+          
+          echo "Contents of app bundle:"
+          find dist/iPASideloader.app -type f -name "*.py" | sort
+          
+          echo "Checking if app launcher is properly included..."
+          cat dist/iPASideloader.app/Contents/MacOS/iPASideloader || echo "Could not find app launcher"
+      
+      - name: Create zip of app
+        run: |
+          cd dist
+          zip -r iPASideloader.zip iPASideloader.app
+          cd ..
+      
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          else
+            VERSION="dev-$(date +'%Y%m%d%H%M%S')"
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Rename zip
+        run: |
+          VERSION=${{ steps.get_version.outputs.VERSION }}
+          mv dist/iPASideloader.zip "iPASideloader-$VERSION.zip"
+      
+      - name: Upload app as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iPASideloader-${{ steps.get_version.outputs.VERSION }}
+          path: iPASideloader-${{ steps.get_version.outputs.VERSION }}.zip
+      
+      - name: Create Release and Upload Asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: iPASideloader-${{ steps.get_version.outputs.VERSION }}.zip
+          draft: false
+          prerelease: false 
