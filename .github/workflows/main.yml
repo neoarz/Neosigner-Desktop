@@ -1,0 +1,247 @@
+name: Build macOS App
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Clone zsign if needed
+        run: |
+          if [ ! -d "zsign" ]; then
+            git clone https://github.com/zhlynn/zsign.git
+          fi
+      
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install pkg-config openssl@1.1 minizip
+          brew install libimobiledevice ideviceinstaller create-dmg
+      
+      - name: Build zsign
+        run: |
+          cd zsign/build/macos
+          make clean && make
+          cd ../../..
+          mkdir -p bin
+          cp zsign/build/macos/zsign bin/
+          chmod +x bin/zsign
+      
+      - name: Create app bundle structure
+        run: |
+          mkdir -p resources/bin
+          cp bin/zsign resources/bin/
+          
+          # Copy ideviceinstaller and dependencies
+          IDEVICEINSTALLER_PATH=$(which ideviceinstaller)
+          cp "$IDEVICEINSTALLER_PATH" resources/bin/
+          
+          # Copy libimobiledevice utilities
+          for util in idevice_id ideviceinfo idevicename; do
+            UTIL_PATH=$(which $util)
+            if [ -n "$UTIL_PATH" ]; then
+              cp "$UTIL_PATH" resources/bin/
+            fi
+          done
+      
+      - name: Create app launcher
+        run: |
+          cat > app_launcher.py << 'EOF'
+          #!/usr/bin/env python3
+          import os
+          import sys
+          import subprocess
+          import tkinter as tk
+          from tkinter import messagebox
+          import zsign_gui
+
+          # Get the application path
+          if getattr(sys, 'frozen', False):
+              application_path = os.path.dirname(sys.executable)
+          elif __file__:
+              application_path = os.path.dirname(os.path.abspath(__file__))
+
+          # Add bin directory to PATH
+          bin_path = os.path.join(application_path, 'resources', 'bin')
+          os.environ['PATH'] = f"{bin_path}:{os.environ.get('PATH', '')}"
+
+          # Make sure binaries are executable
+          for binary in os.listdir(bin_path):
+              binary_path = os.path.join(bin_path, binary)
+              if not os.access(binary_path, os.X_OK):
+                  os.chmod(binary_path, 0o755)
+
+          # Launch the GUI
+          if __name__ == "__main__":
+              root = tk.Tk()
+              app = zsign_gui.ZsignGUI(root)
+              root.mainloop()
+          EOF
+      
+      - name: Create app icon
+        run: |
+          # Create a simple icon for the app (optional - replace with a better one)
+          mkdir -p AppIcon.iconset
+          
+          # Create a colored square with text as the base icon
+          echo '<?xml version="1.0" encoding="UTF-8"?>
+          <svg width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
+            <rect width="1024" height="1024" fill="#007AFF"/>
+            <text x="512" y="620" font-family="Arial" font-size="500" text-anchor="middle" fill="white">iPA</text>
+          </svg>' > app_icon.svg
+          
+          # Convert SVG to PNG
+          brew install librsvg
+          for size in 16 32 64 128 256 512 1024; do
+            rsvg-convert -w $size -h $size app_icon.svg -o AppIcon.iconset/icon_${size}x${size}.png
+            
+            # Create @2x versions for retina display
+            if [ $size -le 512 ]; then
+              half_size=$((size / 2))
+              rsvg-convert -w $size -h $size app_icon.svg -o AppIcon.iconset/icon_${half_size}x${half_size}@2x.png
+            fi
+          done
+          
+          # Convert to icns
+          iconutil -c icns AppIcon.iconset
+      
+      - name: Create PyInstaller spec file
+        run: |
+          cat > iPASideloader.spec << EOF
+          # -*- mode: python ; coding: utf-8 -*-
+
+          block_cipher = None
+
+          a = Analysis(
+              ['app_launcher.py'],
+              pathex=[],
+              binaries=[],
+              datas=[('resources/', 'resources/')],
+              hiddenimports=[],
+              hookspath=[],
+              hooksconfig={},
+              runtime_hooks=[],
+              excludes=[],
+              win_no_prefer_redirects=False,
+              win_private_assemblies=False,
+              cipher=block_cipher,
+              noarchive=False,
+          )
+          pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+          exe = EXE(
+              pyz,
+              a.scripts,
+              [],
+              exclude_binaries=True,
+              name='iPASideloader',
+              debug=False,
+              bootloader_ignore_signals=False,
+              strip=False,
+              upx=True,
+              console=False,
+              disable_windowed_traceback=False,
+              argv_emulation=True,
+              target_arch=None,
+              codesign_identity=None,
+              entitlements_file=None,
+              icon='AppIcon.icns',
+          )
+          coll = COLLECT(
+              exe,
+              a.binaries,
+              a.zipfiles,
+              a.datas,
+              strip=False,
+              upx=True,
+              upx_exclude=[],
+              name='iPASideloader',
+          )
+          app = BUNDLE(
+              coll,
+              name='iPASideloader.app',
+              icon='AppIcon.icns',
+              bundle_identifier='com.neoarz.ipasideloader',
+              info_plist={
+                  'CFBundleShortVersionString': '1.0.0',
+                  'NSHighResolutionCapable': 'True',
+                  'NSRequiresAquaSystemAppearance': 'False',
+                  'LSEnvironment': {'PATH': '@executable_path/../Resources/resources/bin'}
+              },
+          )
+          EOF
+      
+      - name: Build macOS app
+        run: |
+          pyinstaller --clean iPASideloader.spec
+      
+      - name: Create DMG
+        run: |
+          create-dmg \
+            --volname "iPASideloader" \
+            --volicon "AppIcon.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "iPASideloader.app" 200 190 \
+            --hide-extension "iPASideloader.app" \
+            --app-drop-link 600 185 \
+            "iPASideloader.dmg" \
+            "dist/iPASideloader.app"
+      
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          else
+            VERSION="dev-$(date +'%Y%m%d%H%M%S')"
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Rename DMG
+        run: |
+          VERSION=${{ steps.get_version.outputs.VERSION }}
+          mv iPASideloader.dmg "iPASideloader-$VERSION.dmg"
+      
+      - name: Upload DMG as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: iPASideloader-${{ steps.get_version.outputs.VERSION }}
+          path: iPASideloader-${{ steps.get_version.outputs.VERSION }}.dmg
+      
+      - name: Create Release and Upload Asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: iPASideloader-${{ steps.get_version.outputs.VERSION }}.dmg
+          draft: false
+          prerelease: false 
