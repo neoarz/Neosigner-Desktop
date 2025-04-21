@@ -55,12 +55,6 @@ else
   echo "✅ pip3 already installed"
 fi
 
-# Install tkinter
-echo "🖥️ Installing tkinter..."
-brew install python-tk
-brew install python-tk@3.13
-
-
 # Install Python dependencies
 echo "🐍 Installing Python dependencies..."
 pip3 install -r requirements.txt
@@ -69,8 +63,46 @@ pip3 install -r requirements.txt
 echo "🔄 Updating Homebrew..."
 brew update
 
-echo "📦 Installing dependencies..."
-brew install pkg-config openssl minizip ideviceinstaller
+echo "📦 Installing basic dependencies..."
+brew install pkg-config openssl minizip
+
+# Install libimobiledevice and ideviceinstaller
+echo "📱 Installing libimobiledevice and ideviceinstaller..."
+
+# Try installing from Homebrew first
+if brew list --formula | grep -q "^libimobiledevice$"; then
+  echo "✅ libimobiledevice already installed"
+else
+  echo "Installing libimobiledevice..."
+  brew install libimobiledevice
+fi
+
+# Check if ideviceinstaller is already installed
+if command -v ideviceinstaller &>/dev/null; then
+  echo "✅ ideviceinstaller already installed"
+else
+  echo "Installing ideviceinstaller..."
+  # First try the Homebrew formula if it exists
+  if brew list --formula | grep -q "^ideviceinstaller$"; then
+    echo "Using Homebrew formula for ideviceinstaller"
+    brew install ideviceinstaller
+  else
+    # If the formula doesn't exist, try installing from source
+    echo "Homebrew formula for ideviceinstaller not found, installing from source..."
+    
+    # Install libimobiledevice dependencies
+    brew install libtool autoconf automake libplist libzip
+
+    # Clone and install ideviceinstaller
+    git clone https://github.com/libimobiledevice/ideviceinstaller.git
+    cd ideviceinstaller
+    ./autogen.sh
+    make
+    make install
+    cd ..
+    rm -rf ideviceinstaller
+  fi
+fi
 
 # Check if the zsign directory already exists
 if [ -d "zsign" ]; then
