@@ -135,7 +135,7 @@ class ZsignGUI:
                 "/local/zsign/bin/zsign",
                 "/usr/local/bin/zsign/bin/zsign",
                 "/usr/zsign/bin/zsign",
-                "/Users/Nazeef/Desktop/zsign/bin/zsign"  # Add the correct full path
+                "/Users/local/Desktop/zsign/bin/zsign"  # Add the correct full path
             ]
         elif sys.platform.startswith("linux"):
             # Linux
