@@ -57,9 +57,16 @@ jobs:
           cd zsign/build/macos
           make clean && make
           cd ../../..
+          
+          # Create bin directory for our app
           mkdir -p bin
-          cp zsign/build/macos/zsign bin/
+          
+          # Copy the built zsign binary (from zsign/bin/zsign)
+          cp zsign/bin/zsign bin/
           chmod +x bin/zsign
+          
+          # Verify that zsign works
+          bin/zsign -v
       
       - name: Create app bundle structure
         run: |
