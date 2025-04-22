@@ -93,30 +93,62 @@ jobs:
           if [ -n "$IDEVICEINSTALLER_PATH" ]; then
             cp "$IDEVICEINSTALLER_PATH" resources/bin/
             chmod +x resources/bin/ideviceinstaller
+            echo "Copied ideviceinstaller to resources/bin/"
           else
             echo "Warning: ideviceinstaller not found"
           fi
           
-          # Copy libimobiledevice utilities
-          for util in idevice_id ideviceinfo idevicename; do
+          # Copy libimobiledevice utilities and dependencies
+          for util in idevice_id ideviceinfo idevicename ideviceinstaller; do
             UTIL_PATH=$(which $util)
             if [ -n "$UTIL_PATH" ]; then
               cp "$UTIL_PATH" resources/bin/
               chmod +x resources/bin/$util
+              echo "Copied $util to resources/bin/"
+              
+              # Find all dylib dependencies
+              otool -L "$UTIL_PATH" | grep -v "/System" | grep -v "/usr/lib" | awk '{print $1}' | while read -r lib; do
+                if [[ "$lib" == *"/"* ]] && [[ -f "$lib" ]]; then
+                  lib_base=$(basename "$lib")
+                  if [[ ! -f "resources/bin/$lib_base" ]]; then
+                    echo "Copying $lib to resources/bin/$lib_base"
+                    cp "$lib" "resources/bin/$lib_base" || echo "Failed to copy $lib"
+                    chmod +x "resources/bin/$lib_base"
+                    
+                    # Fix the rpath in the binary
+                    install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" 2>/dev/null || echo "Failed to change path for $lib in $bin_file"
+                    
+                    # Recursively copy dependencies of this library too
+                    otool -L "$lib" | grep -v "/System" | grep -v "/usr/lib" | awk '{print $1}' | while read -r sublib; do
+                      if [[ "$sublib" == *"/"* ]] && [[ -f "$sublib" ]] && [[ "$sublib" != "$lib" ]]; then
+                        sublib_base=$(basename "$sublib")
+                        if [[ ! -f "resources/bin/$sublib_base" ]]; then
+                          echo "Copying sub-dependency $sublib to resources/bin/$sublib_base"
+                          cp "$sublib" "resources/bin/$sublib_base" || echo "Failed to copy $sublib"
+                          chmod +x "resources/bin/$sublib_base"
+                        fi
+                      fi
+                    done
+                  fi
+                fi
+              done
             fi
           done
           
-          # Copy shared libraries that these binaries depend on
+          # Fix up all binaries to use local copies of dylibs
           for bin_file in resources/bin/*; do
             if [ -f "$bin_file" ] && [ -x "$bin_file" ]; then
-              echo "Copying dependencies for $bin_file"
+              echo "Fixing dependencies for $bin_file"
               otool -L "$bin_file" | grep -v "/System" | grep -v "/usr/lib" | awk '{print $1}' | while read -r lib; do
                 if [[ "$lib" == *"/"* ]]; then
                   lib_base=$(basename "$lib")
-                  echo "Copying $lib to resources/bin/$lib_base"
-                  cp "$lib" "resources/bin/$lib_base" || echo "Failed to copy $lib"
-                  # Fix the rpath in the binary
-                  install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" || echo "Failed to change path for $lib in $bin_file"
+                  # Only fix if we have a local copy
+                  if [[ -f "resources/bin/$lib_base" ]]; then
+                    echo "Fixing rpath: $lib -> @executable_path/$lib_base in $bin_file"
+                    install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" 2>/dev/null || echo "Failed to change path for $lib in $bin_file"
+                  else
+                    echo "Warning: dependency $lib not found locally for $bin_file"
+                  fi
                 fi
               done
             fi
@@ -125,6 +157,16 @@ jobs:
           # List the resources/bin directory to verify
           echo "Contents of resources/bin:"
           ls -la resources/bin/
+          
+          # Check file type and dependencies
+          for bin_file in resources/bin/*; do
+            if [ -f "$bin_file" ] && [ -x "$bin_file" ]; then
+              echo "File type of $bin_file:"
+              file "$bin_file"
+              echo "Dependencies of $bin_file:"
+              otool -L "$bin_file" | head -n 20
+            fi
+          done
       
       - name: Create app launcher
         run: |
@@ -144,7 +186,9 @@ jobs:
               # List all possible bin paths in order of preference
               possible_bin_paths = [
                   os.path.join(application_path, 'bin'),                              # /Contents/MacOS/bin
-                  os.path.join(os.path.dirname(application_path), 'Resources', 'bin') # /Contents/Resources/bin
+                  os.path.join(os.path.dirname(application_path), 'Resources', 'bin'), # /Contents/Resources/bin
+                  os.path.join(application_path, 'resources', 'bin'),                 # /Contents/MacOS/resources/bin
+                  os.path.join(os.path.dirname(application_path), 'Resources', 'resources', 'bin') # /Contents/Resources/resources/bin
               ]
               
               # Find the first valid bin path
@@ -163,8 +207,15 @@ jobs:
           
           # Add bin directory to PATH
           if bin_path and os.path.exists(bin_path):
+              # Prepend bin path to PATH environment variable
               os.environ['PATH'] = f"{bin_path}:{os.environ.get('PATH', '')}"
               print(f"Added {bin_path} to PATH")
+              
+              # Set DYLD_LIBRARY_PATH to help find dependencies
+              if os.environ.get('DYLD_LIBRARY_PATH'):
+                  os.environ['DYLD_LIBRARY_PATH'] = f"{bin_path}:{os.environ.get('DYLD_LIBRARY_PATH', '')}"
+              else:
+                  os.environ['DYLD_LIBRARY_PATH'] = bin_path
               
               # Debug: List bin directory contents
               print("Bin directory contents:")
@@ -207,8 +258,9 @@ jobs:
               messagebox.showerror("Error", f"Failed to import zsign_gui: {e}")
               sys.exit(1)
           
-          # Check if zsign is available
+          # Check if zsign and ideviceinstaller are available
           try:
+              # Check zsign
               zsign_path = None
               if bin_path:
                   zsign_path = os.path.join(bin_path, "zsign")
@@ -227,8 +279,35 @@ jobs:
               print(f"zsign output: {result.stdout}")
               if result.stderr:
                   print(f"zsign stderr: {result.stderr}")
+                  
+              # Check ideviceinstaller
+              ideviceinstaller_path = None
+              if bin_path:
+                  ideviceinstaller_path = os.path.join(bin_path, "ideviceinstaller")
+                  if os.path.exists(ideviceinstaller_path):
+                      print(f"Found ideviceinstaller at: {ideviceinstaller_path}")
+                      # Make it executable if needed
+                      if not os.access(ideviceinstaller_path, os.X_OK):
+                          os.chmod(ideviceinstaller_path, 0o755)
+                          print("Made ideviceinstaller executable")
+                  else:
+                      print(f"ideviceinstaller not found at expected path: {ideviceinstaller_path}")
+              
+              # Try to check ideviceinstaller version
+              try:
+                  result = subprocess.run(["ideviceinstaller", "--version"], 
+                                          stdout=subprocess.PIPE, 
+                                          stderr=subprocess.PIPE, 
+                                          text=True,
+                                          env=os.environ)
+                  print(f"ideviceinstaller version check result: {result.returncode}")
+                  print(f"ideviceinstaller output: {result.stdout}")
+                  if result.stderr:
+                      print(f"ideviceinstaller stderr: {result.stderr}")
+              except Exception as e:
+                  print(f"Error checking ideviceinstaller: {e}")
           except Exception as e:
-              print(f"Error checking zsign: {e}")
+              print(f"Error checking tools: {e}")
           
           # Launch the GUI
           if __name__ == "__main__":
@@ -342,12 +421,17 @@ jobs:
 
           block_cipher = None
 
+          # Collect all binary files from resources/bin
+          bin_files = []
+          import os
+          for file in os.listdir('resources/bin'):
+              bin_files.append(('resources/bin/' + file, 'bin/' + file))
+
           a = Analysis(
               ['app_launcher.py'],
               pathex=[],
-              binaries=[],
+              binaries=bin_files,  # Include all binary files
               datas=[
-                  ('resources/bin', 'bin'),
                   ('zsign_gui.py', '.'),
                   ('assets/Icon.png', 'assets'),
               ],
@@ -423,9 +507,25 @@ jobs:
           echo "Looking for zsign in the app bundle..."
           find dist/NeoSigner.app -name zsign -type f | xargs ls -la || echo "zsign not found in app bundle"
           
+          echo "Looking for ideviceinstaller in the app bundle..."
+          find dist/NeoSigner.app -name ideviceinstaller -type f | xargs ls -la || echo "ideviceinstaller not found in app bundle"
+          
+          echo "Checking contents of bin directories..."
+          find dist/NeoSigner.app -path "*/bin" -type d | while read -r bin_dir; do
+            echo "Contents of $bin_dir:"
+            ls -la "$bin_dir" || echo "Failed to list $bin_dir"
+            
+            # Check dependencies of each binary
+            echo "Checking dependencies in $bin_dir..."
+            find "$bin_dir" -type f -perm +111 | while read -r bin_file; do
+              echo "Dependencies for $bin_file:"
+              otool -L "$bin_file" | head -n 10 || echo "Failed to check dependencies for $bin_file"
+            done
+          done
+          
           echo "Checking resources directory..."
-          ls -la dist/NeoSigner.app/Contents/Resources/resources/bin || echo "Resources/resources/bin not found"
-          ls -la dist/NeoSigner.app/Contents/MacOS/resources/bin || echo "MacOS/resources/bin not found"
+          ls -la dist/NeoSigner.app/Contents/Resources/resources/bin 2>/dev/null || echo "Resources/resources/bin not found"
+          ls -la dist/NeoSigner.app/Contents/MacOS/resources/bin 2>/dev/null || echo "MacOS/resources/bin not found"
           
           echo "Contents of app bundle:"
           find dist/NeoSigner.app -type f -name "*.py" | sort

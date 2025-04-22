@@ -79,6 +79,20 @@ class ZsignGUI:
     def find_ideviceinstaller(self):
         """Find ideviceinstaller binary for easy installation to device"""
         if sys.platform == "darwin":
+            # First check bundled app resources (if running as app bundle)
+            if getattr(sys, 'frozen', False):
+                # Running as bundled app
+                bundle_dir = os.path.dirname(sys.executable)
+                possible_paths = [
+                    os.path.join(bundle_dir, 'bin', 'ideviceinstaller'),
+                    os.path.join(os.path.dirname(bundle_dir), 'Resources', 'bin', 'ideviceinstaller'),
+                    os.path.join(bundle_dir, 'resources', 'bin', 'ideviceinstaller'),
+                    os.path.join(os.path.dirname(bundle_dir), 'Resources', 'resources', 'bin', 'ideviceinstaller')
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path) and os.access(path, os.X_OK):
+                        return path
+            
             # Check common paths on macOS
             paths = [
                 "/usr/local/bin/ideviceinstaller",
@@ -387,16 +401,45 @@ class ZsignGUI:
             messagebox.showerror("Error", f"Signed app not found: {output_file}")
             return
         
+        # Debug info about ideviceinstaller
+        self.append_output(f"Using ideviceinstaller from: {self.ideviceinstaller_path}")
+        try:
+            # Check if the binary is executable
+            if not os.access(self.ideviceinstaller_path, os.X_OK):
+                self.append_output(f"Warning: ideviceinstaller is not executable. Trying to fix permissions...")
+                os.chmod(self.ideviceinstaller_path, 0o755)
+            
+            # Check file type
+            file_type_cmd = ["file", self.ideviceinstaller_path]
+            result = subprocess.run(file_type_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.append_output(f"ideviceinstaller file type: {result.stdout.strip()}")
+            
+            # Try a version check to ensure it works
+            version_check = [self.ideviceinstaller_path, "--version"]
+            result = subprocess.run(version_check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.stdout:
+                self.append_output(f"ideviceinstaller version: {result.stdout.strip()}")
+            if result.stderr:
+                self.append_output(f"ideviceinstaller stderr: {result.stderr.strip()}")
+        except Exception as e:
+            self.append_output(f"Error checking ideviceinstaller: {str(e)}")
+        
         # Check if device is connected
         try:
+            self.append_output("Checking for connected iOS devices...")
             result = subprocess.run([self.ideviceinstaller_path, "-l"], 
                                    stdout=subprocess.PIPE, 
                                    stderr=subprocess.PIPE,
                                    text=True)
+            self.append_output(f"Device check result: {result.stdout.strip()}")
+            if result.stderr:
+                self.append_output(f"Device check stderr: {result.stderr.strip()}")
+                
             if "ERROR:" in result.stdout or "ERROR:" in result.stderr:
                 messagebox.showerror("Error", "No iOS device found. Please connect your device.")
                 return
         except Exception as e:
+            self.append_output(f"Error checking device: {str(e)}")
             messagebox.showerror("Error", f"Error checking device: {str(e)}")
             return
         
@@ -405,6 +448,8 @@ class ZsignGUI:
         
         try:
             cmd = [self.ideviceinstaller_path, "-i", output_file]
+            self.append_output(f"Running command: {' '.join(cmd)}")
+            
             process = subprocess.Popen(
                 cmd, 
                 stdout=subprocess.PIPE, 
