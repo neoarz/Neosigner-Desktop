@@ -266,7 +266,7 @@ jobs:
           
           try:
               # Load the source image
-              source_img = Image.open("assets/neosigner.png")
+              source_img = Image.open("assets/Icon.png")
               
               # Function to create circular mask
               def create_circular_mask(size):
@@ -349,7 +349,7 @@ jobs:
               datas=[
                   ('resources/bin', 'bin'),
                   ('zsign_gui.py', '.'),
-                  ('assets/neosigner.png', 'assets'),
+                  ('assets/Icon.png', 'assets'),
               ],
               hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext'],
               hookspath=[],
@@ -433,12 +433,6 @@ jobs:
           echo "Checking if app launcher is properly included..."
           cat dist/iPASideloader.app/Contents/MacOS/iPASideloader || echo "Could not find app launcher"
       
-      - name: Create zip of app
-        run: |
-          cd dist
-          zip -r iPASideloader.zip iPASideloader.app
-          cd ..
-      
       - name: Get version from tag
         id: get_version
         run: |
@@ -520,14 +514,15 @@ jobs:
             --app-drop-link 450 190 \
             "iPASideloader-$VERSION.dmg" \
             "dmg_contents/"
+          
+          # Verify the DMG was created
+          ls -la iPASideloader-$VERSION.dmg
       
       - name: Upload app as artifact
         uses: actions/upload-artifact@v4
         with:
           name: iPASideloader-${{ steps.get_version.outputs.VERSION }}
-          path: |
-            iPASideloader-${{ steps.get_version.outputs.VERSION }}.dmg
-            dist/iPASideloader.app
+          path: iPASideloader-${{ steps.get_version.outputs.VERSION }}.dmg
       
       - name: Create Release and Upload Asset
         if: startsWith(github.ref, 'refs/tags/v')
