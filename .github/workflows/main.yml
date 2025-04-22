@@ -51,6 +51,21 @@ jobs:
           brew update
           brew install pkg-config openssl@1.1 minizip
           brew install libimobiledevice ideviceinstaller create-dmg
+          
+          # Ensure dependencies have the right permissions
+          echo "Checking for libimobiledevice binaries..."
+          for bin in idevice_id ideviceinfo idevicename ideviceinstaller; do
+            BINARY_PATH=$(which $bin 2>/dev/null || echo "")
+            if [ -n "$BINARY_PATH" ]; then
+              echo "Found $bin at $BINARY_PATH"
+              if [ ! -x "$BINARY_PATH" ]; then
+                echo "Making $BINARY_PATH executable..."
+                sudo chmod +x "$BINARY_PATH"
+              fi
+            else
+              echo "Warning: $bin not found"
+            fi
+          done
       
       - name: Build zsign
         run: |
@@ -81,18 +96,23 @@ jobs:
       
       - name: Create app bundle structure
         run: |
-          # First, make sure our resources directory exists
-          mkdir -p resources/bin
+          # First, make sure our resources directory exists with proper permissions
+          sudo rm -rf resources/bin || true
+          mkdir -p resources || true
+          sudo mkdir -p resources/bin || mkdir -p resources/bin
+          sudo chown -R $(whoami) resources || true
+          sudo chmod -R 755 resources || chmod -R 755 resources
           
           # Copy zsign to resources/bin
           cp bin/zsign resources/bin/
           chmod +x resources/bin/zsign
           
-          # Copy ideviceinstaller and dependencies
+          # Copy ideviceinstaller and dependencies with sudo if needed
           IDEVICEINSTALLER_PATH=$(which ideviceinstaller)
           if [ -n "$IDEVICEINSTALLER_PATH" ]; then
-            cp "$IDEVICEINSTALLER_PATH" resources/bin/
-            chmod +x resources/bin/ideviceinstaller
+            echo "Copying ideviceinstaller from: $IDEVICEINSTALLER_PATH"
+            sudo cp "$IDEVICEINSTALLER_PATH" resources/bin/ || cp "$IDEVICEINSTALLER_PATH" resources/bin/
+            sudo chmod +x resources/bin/ideviceinstaller
             echo "Copied ideviceinstaller to resources/bin/"
           else
             echo "Warning: ideviceinstaller not found"
@@ -102,9 +122,13 @@ jobs:
           for util in idevice_id ideviceinfo idevicename ideviceinstaller; do
             UTIL_PATH=$(which $util)
             if [ -n "$UTIL_PATH" ]; then
-              cp "$UTIL_PATH" resources/bin/
-              chmod +x resources/bin/$util
+              echo "Copying $util from: $UTIL_PATH"
+              sudo cp "$UTIL_PATH" resources/bin/ || cp "$UTIL_PATH" resources/bin/
+              sudo chmod +x resources/bin/$util || chmod +x resources/bin/$util
               echo "Copied $util to resources/bin/"
+              
+              # Get the destination path for the binary
+              DEST_BIN="resources/bin/$(basename "$UTIL_PATH")"
               
               # Find all dylib dependencies
               otool -L "$UTIL_PATH" | grep -v "/System" | grep -v "/usr/lib" | awk '{print $1}' | while read -r lib; do
@@ -112,11 +136,11 @@ jobs:
                   lib_base=$(basename "$lib")
                   if [[ ! -f "resources/bin/$lib_base" ]]; then
                     echo "Copying $lib to resources/bin/$lib_base"
-                    cp "$lib" "resources/bin/$lib_base" || echo "Failed to copy $lib"
-                    chmod +x "resources/bin/$lib_base"
+                    sudo cp "$lib" "resources/bin/$lib_base" || cp "$lib" "resources/bin/$lib_base" || echo "Failed to copy $lib"
+                    sudo chmod +x "resources/bin/$lib_base" || chmod +x "resources/bin/$lib_base"
                     
                     # Fix the rpath in the binary
-                    install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" 2>/dev/null || echo "Failed to change path for $lib in $bin_file"
+                    sudo install_name_tool -change "$lib" "@executable_path/$lib_base" "$DEST_BIN" 2>/dev/null || install_name_tool -change "$lib" "@executable_path/$lib_base" "$DEST_BIN" 2>/dev/null || echo "Failed to change path for $lib in $DEST_BIN"
                     
                     # Recursively copy dependencies of this library too
                     otool -L "$lib" | grep -v "/System" | grep -v "/usr/lib" | awk '{print $1}' | while read -r sublib; do
@@ -124,8 +148,8 @@ jobs:
                         sublib_base=$(basename "$sublib")
                         if [[ ! -f "resources/bin/$sublib_base" ]]; then
                           echo "Copying sub-dependency $sublib to resources/bin/$sublib_base"
-                          cp "$sublib" "resources/bin/$sublib_base" || echo "Failed to copy $sublib"
-                          chmod +x "resources/bin/$sublib_base"
+                          sudo cp "$sublib" "resources/bin/$sublib_base" || cp "$sublib" "resources/bin/$sublib_base" || echo "Failed to copy $sublib"
+                          sudo chmod +x "resources/bin/$sublib_base" || chmod +x "resources/bin/$sublib_base"
                         fi
                       fi
                     done
@@ -145,7 +169,7 @@ jobs:
                   # Only fix if we have a local copy
                   if [[ -f "resources/bin/$lib_base" ]]; then
                     echo "Fixing rpath: $lib -> @executable_path/$lib_base in $bin_file"
-                    install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" 2>/dev/null || echo "Failed to change path for $lib in $bin_file"
+                    sudo install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" 2>/dev/null || install_name_tool -change "$lib" "@executable_path/$lib_base" "$bin_file" 2>/dev/null || echo "Failed to change path for $lib in $bin_file"
                   else
                     echo "Warning: dependency $lib not found locally for $bin_file"
                   fi
@@ -156,6 +180,14 @@ jobs:
           
           # List the resources/bin directory to verify
           echo "Contents of resources/bin:"
+          ls -la resources/bin/
+          
+          # Make sure all files in resources/bin are executable
+          echo "Making sure all files in resources/bin are executable..."
+          find resources/bin/ -type f -exec sudo chmod +x {} \; || find resources/bin/ -type f -exec chmod +x {} \;
+          
+          # List again to verify permissions
+          echo "Contents of resources/bin after fixing permissions:"
           ls -la resources/bin/
           
           # Check file type and dependencies
