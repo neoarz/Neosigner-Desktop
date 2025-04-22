@@ -1,4 +1,4 @@
-# Neosigner-Desktop
+# Neosigner-Desktop (DO NOT FOLLOW THIS README; IT IS OUTDATED, USE THE WORKFLOW BUILD)
 
 A user-friendly GUI wrapper for zsign and ideviceinstaller, making iOS app sideloading simpler for everyone.
 
