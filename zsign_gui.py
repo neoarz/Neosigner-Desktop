@@ -132,6 +132,7 @@ class ZsignGUI:
                 os.path.join(base_dir, "zsign/bin/zsign"),
                 os.path.join(base_dir, "build", "macos", "zsign"),
                 os.path.join(base_dir, "zsign"),
+                os.path.join(base_dir, "zsign-binarys", "macos", "zsign"),
                 "/usr/local/bin/zsign",
                 "/opt/homebrew/bin/zsign",                               # Homebrew on Apple Silicon
                 os.path.join(home_dir, "zsign/bin/zsign"),               # User's home directory
@@ -162,6 +163,7 @@ class ZsignGUI:
                 os.path.join(base_dir, "bin", "zsign"),
                 os.path.join(base_dir, "build", "linux", "zsign"),
                 os.path.join(base_dir, "zsign"),
+                os.path.join(base_dir, "zsign-binarys", "linux", "zsign"),
                 os.path.join(home_dir, "zsign/bin/zsign"),
                 os.path.join(home_dir, "bin/zsign"),
                 os.path.join(home_dir, ".local/bin/zsign"),
@@ -173,11 +175,13 @@ class ZsignGUI:
             paths = [
                 os.path.join(base_dir, "bin", "zsign.exe"),
                 os.path.join(base_dir, "build", "windows", "vs2022", "x64", "Release", "zsign.exe"),
-                os.path.join(base_dir, "zsign.exe")
+                os.path.join(base_dir, "zsign.exe"),
+                os.path.join(base_dir, "zsign-binarys", "windows", "zsign.exe")
             ]
         else:
             # Unknown platform
             return None
+            print(f"Platform could not be identified!")
         
         # Print search paths to output for debugging
         print(f"Searching for zsign binary in the following paths:")
