@@ -1,4 +1,4 @@
-# iPASideloader
+# Neosigner-Desktop
 
 A user-friendly GUI wrapper for zsign and ideviceinstaller, making iOS app sideloading simpler for everyone.
 
