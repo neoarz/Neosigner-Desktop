@@ -247,9 +247,97 @@ jobs:
                   sys.exit(1)
           EOF
       
+      - name: Create macOS app icon from existing image
+        run: |
+          # Create the iconset directory
+          mkdir -p app_icon.iconset
+          
+          # Use Python and Pillow to process the existing image
+          python3 - << 'EOF'
+          from PIL import Image
+          import os
+          import math
+          
+          # Create iconset directory if it doesn't exist
+          os.makedirs("app_icon.iconset", exist_ok=True)
+          
+          # Icon sizes needed for macOS
+          sizes = [16, 32, 64, 128, 256, 512, 1024]
+          
+          try:
+              # Load the source image
+              source_img = Image.open("assets/Icon.png")
+              
+              # Function to create circular mask
+              def create_circular_mask(size):
+                  img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+                  mask = Image.new('L', (size, size), 0)
+                  
+                  # Draw a circle on the mask
+                  import ImageDraw
+                  draw = ImageDraw.Draw(mask)
+                  draw.ellipse((0, 0, size, size), fill=255)
+                  
+                  return mask
+              
+              # Process image for each size
+              for size in sizes:
+                  # Resize the image while maintaining aspect ratio
+                  img = source_img.copy()
+                  img = img.resize((size, size), Image.LANCZOS)
+                  
+                  # Try to make it circular (macOS style) using a mask
+                  try:
+                      # For older Pillow versions
+                      mask = Image.new('L', (size, size), 0)
+                      import ImageDraw
+                      draw = ImageDraw.Draw(mask)
+                      draw.ellipse((0, 0, size, size), fill=255)
+                      
+                      # Create a blank RGBA image
+                      circular_img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+                      
+                      # Paste the resized image using the circle mask
+                      circular_img.paste(img, (0, 0), mask)
+                      img = circular_img
+                  except:
+                      # Newer Pillow versions may handle this differently
+                      # If the above fails, we'll use the square image as fallback
+                      pass
+                  
+                  # Save icon in various sizes
+                  img.save(f"app_icon.iconset/icon_{size}x{size}.png")
+                  
+                  # Save @2x versions where applicable
+                  if size * 2 <= 1024:
+                      img_2x = source_img.copy()
+                      img_2x = img_2x.resize((size * 2, size * 2), Image.LANCZOS)
+                      img_2x.save(f"app_icon.iconset/icon_{size}x{size}@2x.png")
+              
+              print("App icons generated successfully!")
+          except Exception as e:
+              print(f"Error processing app icon: {e}")
+              # Create a simple fallback icon if we couldn't process the image
+              for size in sizes:
+                  img = Image.new('RGBA', (size, size), color=(52, 152, 219))
+                  img.save(f"app_icon.iconset/icon_{size}x{size}.png")
+                  
+                  if size * 2 <= 1024:
+                      img_2x = Image.new('RGBA', (size * 2, size * 2), color=(52, 152, 219))
+                      img_2x.save(f"app_icon.iconset/icon_{size}x{size}@2x.png")
+              
+              print("Created fallback icons due to error with source image")
+          EOF
+          
+          # Use iconutil to convert the iconset to icns (macOS only)
+          iconutil -c icns app_icon.iconset
+          
+          # Verify the icon was created
+          ls -la app_icon.icns
+      
       - name: Create simplified PyInstaller spec file
         run: |
-          cat > iPASideloader.spec << EOF
+          cat > NeoSigner.spec << EOF
           # -*- mode: python ; coding: utf-8 -*-
 
           block_cipher = None
@@ -261,6 +349,7 @@ jobs:
               datas=[
                   ('resources/bin', 'bin'),
                   ('zsign_gui.py', '.'),
+                  ('assets/Icon.png', 'assets'),
               ],
               hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext'],
               hookspath=[],
@@ -279,17 +368,18 @@ jobs:
               a.scripts,
               [],
               exclude_binaries=True,
-              name='iPASideloader',
+              name='NeoSigner',
               debug=False,
               bootloader_ignore_signals=False,
               strip=False,
               upx=True,
-              console=True,  # Set to True for debugging
+              console=False,  # Set to False to hide terminal window
               disable_windowed_traceback=False,
               argv_emulation=True,
               target_arch=None,
               codesign_identity=None,
               entitlements_file=None,
+              icon='app_icon.icns',
           )
           coll = COLLECT(
               exe,
@@ -299,46 +389,49 @@ jobs:
               strip=False,
               upx=True,
               upx_exclude=[],
-              name='iPASideloader',
+              name='NeoSigner',
           )
           app = BUNDLE(
               coll,
-              name='iPASideloader.app',
-              bundle_identifier='com.neoarz.ipasideloader',
+              name='NeoSigner.app',
+              bundle_identifier='com.neoarz.neosigner',
+              icon='app_icon.icns',
               info_plist={
                   'CFBundleShortVersionString': '1.0.0',
-                  'NSHighResolutionCapable': 'True'
+                  'CFBundleName': 'NeoSigner',
+                  'CFBundleDisplayName': 'NeoSigner',
+                  'CFBundleExecutable': 'NeoSigner',
+                  'CFBundleVersion': '1.0.0',
+                  'NSHighResolutionCapable': True,
+                  'NSRequiresAquaSystemAppearance': False,
+                  'LSApplicationCategoryType': 'public.app-category.developer-tools',
+                  'NSHumanReadableCopyright': 'Copyright © 2023',
+                  'LSMinimumSystemVersion': '10.14.0'
               },
           )
           EOF
       
       - name: Build macOS app
         run: |
-          pyinstaller --clean iPASideloader.spec
+          pyinstaller --clean NeoSigner.spec
       
       - name: Verify app structure
         run: |
           echo "Checking app structure..."
-          find dist/iPASideloader.app -type d | sort
+          find dist/NeoSigner.app -type d | sort
           
           echo "Looking for zsign in the app bundle..."
-          find dist/iPASideloader.app -name zsign -type f | xargs ls -la || echo "zsign not found in app bundle"
+          find dist/NeoSigner.app -name zsign -type f | xargs ls -la || echo "zsign not found in app bundle"
           
           echo "Checking resources directory..."
-          ls -la dist/iPASideloader.app/Contents/Resources/resources/bin || echo "Resources/resources/bin not found"
-          ls -la dist/iPASideloader.app/Contents/MacOS/resources/bin || echo "MacOS/resources/bin not found"
+          ls -la dist/NeoSigner.app/Contents/Resources/resources/bin || echo "Resources/resources/bin not found"
+          ls -la dist/NeoSigner.app/Contents/MacOS/resources/bin || echo "MacOS/resources/bin not found"
           
           echo "Contents of app bundle:"
-          find dist/iPASideloader.app -type f -name "*.py" | sort
+          find dist/NeoSigner.app -type f -name "*.py" | sort
           
           echo "Checking if app launcher is properly included..."
-          cat dist/iPASideloader.app/Contents/MacOS/iPASideloader || echo "Could not find app launcher"
-      
-      - name: Create zip of app
-        run: |
-          cd dist
-          zip -r iPASideloader.zip iPASideloader.app
-          cd ..
+          cat dist/NeoSigner.app/Contents/MacOS/NeoSigner || echo "Could not find app launcher"
       
       - name: Get version from tag
         id: get_version
@@ -351,21 +444,90 @@ jobs:
             echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           fi
       
-      - name: Rename zip
+      - name: Create DMG disk image
         run: |
+          # Create a simple background image for the DMG
+          python3 - << 'EOF'
+          from PIL import Image, ImageDraw, ImageFont
+          
+          # Create a nice gradient background
+          width, height = 600, 400
+          background = Image.new('RGBA', (width, height), color=(240, 240, 240, 255))
+          
+          # Add a subtle gradient
+          draw = ImageDraw.Draw(background)
+          for y in range(height):
+              # Create a vertical gradient from light blue to white
+              color = (52, 152, 219, int(255 * (1 - y / height)))
+              draw.line([(0, y), (width, y)], fill=color)
+          
+          # Add text
+          try:
+              # Try to use a font, falling back as needed
+              font_size = 32
+              try:
+                  # Try system font first
+                  font = ImageFont.truetype("Arial Bold", font_size)
+              except:
+                  # Fall back to default
+                  font = ImageFont.load_default()
+                  
+              draw.text((width/2, height/2 - 50), "NeoSigner", font=font, fill=(40, 40, 40), anchor="mm")
+              
+              font_size = 16
+              try:
+                  font_small = ImageFont.truetype("Arial", font_size)
+              except:
+                  font_small = font
+                  
+              draw.text((width/2, height/2 + 20), "Drag the application to the Applications folder", 
+                      font=font_small, fill=(80, 80, 80), anchor="mm")
+          except Exception as e:
+              print(f"Error adding text to background: {e}")
+          
+          # Save the background
+          background.save("dmg_background.png")
+          print("Created DMG background image")
+          EOF
+          
+          # Create a temporary directory for DMG contents
+          mkdir -p dmg_contents
+          
+          # Copy the app to the temporary directory
+          cp -R dist/NeoSigner.app dmg_contents/
+          
+          # Create a symbolic link to /Applications
+          ln -s /Applications dmg_contents/Applications
+          
+          # Create the DMG
           VERSION=${{ steps.get_version.outputs.VERSION }}
-          mv dist/iPASideloader.zip "iPASideloader-$VERSION.zip"
+          create-dmg \
+            --volname "NeoSigner" \
+            --volicon "app_icon.icns" \
+            --background "dmg_background.png" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "NeoSigner.app" 150 190 \
+            --icon "Applications" 450 190 \
+            --hide-extension "NeoSigner.app" \
+            --app-drop-link 450 190 \
+            "NeoSigner-$VERSION.dmg" \
+            "dmg_contents/"
+          
+          # Verify the DMG was created
+          ls -la NeoSigner-$VERSION.dmg
       
       - name: Upload app as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iPASideloader-${{ steps.get_version.outputs.VERSION }}
-          path: iPASideloader-${{ steps.get_version.outputs.VERSION }}.zip
+          name: NeoSigner-${{ steps.get_version.outputs.VERSION }}
+          path: NeoSigner-${{ steps.get_version.outputs.VERSION }}.dmg
       
       - name: Create Release and Upload Asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: iPASideloader-${{ steps.get_version.outputs.VERSION }}.zip
+          files: NeoSigner-${{ steps.get_version.outputs.VERSION }}.dmg
           draft: false
           prerelease: false 
