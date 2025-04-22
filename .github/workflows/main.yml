@@ -208,6 +208,7 @@ jobs:
           import sys
           import subprocess
           import tkinter as tk
+          import stat
           from tkinter import messagebox
           
           # Get the application path
@@ -220,7 +221,8 @@ jobs:
                   os.path.join(application_path, 'bin'),                              # /Contents/MacOS/bin
                   os.path.join(os.path.dirname(application_path), 'Resources', 'bin'), # /Contents/Resources/bin
                   os.path.join(application_path, 'resources', 'bin'),                 # /Contents/MacOS/resources/bin
-                  os.path.join(os.path.dirname(application_path), 'Resources', 'resources', 'bin') # /Contents/Resources/resources/bin
+                  os.path.join(os.path.dirname(application_path), 'Resources', 'resources', 'bin'), # /Contents/Resources/resources/bin
+                  os.path.join(application_path, 'Frameworks', 'bin'),                 # /Contents/Frameworks/bin
               ]
               
               # Find the first valid bin path
@@ -237,8 +239,31 @@ jobs:
           print(f"Application path: {application_path}")
           print(f"Selected bin path: {bin_path}")
           
+          # Function to fix permissions
+          def fix_permissions(directory):
+              if not os.path.exists(directory):
+                  print(f"Directory does not exist: {directory}")
+                  return
+                  
+              print(f"Fixing permissions in {directory}")
+              try:
+                  # Fix permissions on all files in the directory
+                  for filename in os.listdir(directory):
+                      filepath = os.path.join(directory, filename)
+                      if os.path.isfile(filepath):
+                          current_permissions = os.stat(filepath).st_mode
+                          # Add executable permission
+                          new_permissions = current_permissions | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                          os.chmod(filepath, new_permissions)
+                          print(f"Fixed permissions for {filepath}: {oct(new_permissions)}")
+              except Exception as e:
+                  print(f"Error fixing permissions: {e}")
+          
           # Add bin directory to PATH
           if bin_path and os.path.exists(bin_path):
+              # Fix permissions
+              fix_permissions(bin_path)
+              
               # Prepend bin path to PATH environment variable
               os.environ['PATH'] = f"{bin_path}:{os.environ.get('PATH', '')}"
               print(f"Added {bin_path} to PATH")
@@ -256,13 +281,6 @@ jobs:
                       file_path = os.path.join(bin_path, f)
                       is_exec = os.access(file_path, os.X_OK)
                       print(f"  {f} - Executable: {is_exec}")
-                  
-                  # Make sure binaries are executable
-                  for binary in os.listdir(bin_path):
-                      binary_path = os.path.join(bin_path, binary)
-                      if os.path.isfile(binary_path) and not os.access(binary_path, os.X_OK):
-                          os.chmod(binary_path, 0o755)
-                          print(f"Made {binary_path} executable")
               except Exception as e:
                   print(f"Error while accessing bin directory: {e}")
           else:
@@ -298,19 +316,26 @@ jobs:
                   zsign_path = os.path.join(bin_path, "zsign")
                   if os.path.exists(zsign_path):
                       print(f"Found zsign at: {zsign_path}")
+                      # Make sure it's executable
+                      if not os.access(zsign_path, os.X_OK):
+                          print(f"Making zsign executable: {zsign_path}")
+                          os.chmod(zsign_path, 0o755)
                   else:
                       print(f"zsign not found at expected path: {zsign_path}")
               
               # Try to run zsign to verify it works
-              result = subprocess.run(["zsign", "-v"], 
-                                      stdout=subprocess.PIPE, 
-                                      stderr=subprocess.PIPE, 
-                                      text=True,
-                                      env=os.environ)
-              print(f"zsign version check result: {result.returncode}")
-              print(f"zsign output: {result.stdout}")
-              if result.stderr:
-                  print(f"zsign stderr: {result.stderr}")
+              try:
+                  result = subprocess.run([zsign_path, "-v"] if zsign_path else ["zsign", "-v"], 
+                                          stdout=subprocess.PIPE, 
+                                          stderr=subprocess.PIPE, 
+                                          text=True,
+                                          env=os.environ)
+                  print(f"zsign version check result: {result.returncode}")
+                  print(f"zsign output: {result.stdout}")
+                  if result.stderr:
+                      print(f"zsign stderr: {result.stderr}")
+              except Exception as e:
+                  print(f"Error running zsign: {e}")
                   
               # Check ideviceinstaller
               ideviceinstaller_path = None
@@ -320,14 +345,14 @@ jobs:
                       print(f"Found ideviceinstaller at: {ideviceinstaller_path}")
                       # Make it executable if needed
                       if not os.access(ideviceinstaller_path, os.X_OK):
+                          print(f"Making ideviceinstaller executable: {ideviceinstaller_path}")
                           os.chmod(ideviceinstaller_path, 0o755)
-                          print("Made ideviceinstaller executable")
                   else:
                       print(f"ideviceinstaller not found at expected path: {ideviceinstaller_path}")
               
               # Try to check ideviceinstaller version
               try:
-                  result = subprocess.run(["ideviceinstaller", "--version"], 
+                  result = subprocess.run([ideviceinstaller_path, "--version"] if ideviceinstaller_path else ["ideviceinstaller", "--version"], 
                                           stdout=subprocess.PIPE, 
                                           stderr=subprocess.PIPE, 
                                           text=True,
@@ -456,8 +481,30 @@ jobs:
           # Collect all binary files from resources/bin
           bin_files = []
           import os
+          
+          # Make sure resources/bin exists
+          if not os.path.exists('resources/bin'):
+              os.makedirs('resources/bin', exist_ok=True)
+              
+          # Create direct bin dir for zsign
+          if not os.path.exists('bin'):
+              os.makedirs('bin', exist_ok=True)
+          
+          # Make sure zsign is in both places
+          if os.path.exists('resources/bin/zsign'):
+              os.system('cp resources/bin/zsign bin/zsign 2>/dev/null || true')
+              os.system('chmod +x bin/zsign 2>/dev/null || true')
+          elif os.path.exists('bin/zsign'):
+              os.system('cp bin/zsign resources/bin/zsign 2>/dev/null || true')
+              os.system('chmod +x resources/bin/zsign 2>/dev/null || true')
+          
+          # Create list of binary files for PyInstaller
           for file in os.listdir('resources/bin'):
               bin_files.append(('resources/bin/' + file, 'bin/' + file))
+          
+          # Special case for zsign
+          if os.path.exists('bin/zsign'):
+              bin_files.append(('bin/zsign', 'bin/zsign'))
 
           a = Analysis(
               ['app_launcher.py'],
@@ -542,10 +589,26 @@ jobs:
           echo "Looking for ideviceinstaller in the app bundle..."
           find dist/NeoSigner.app -name ideviceinstaller -type f | xargs ls -la || echo "ideviceinstaller not found in app bundle"
           
-          echo "Checking contents of bin directories..."
+          echo "Making sure binaries are executable..."
+          find dist/NeoSigner.app -name zsign -type f -exec chmod +x {} \; || true
+          find dist/NeoSigner.app -name ideviceinstaller -type f -exec chmod +x {} \; || true
+          
+          echo "Checking bin directories for key binaries..."
           find dist/NeoSigner.app -path "*/bin" -type d | while read -r bin_dir; do
             echo "Contents of $bin_dir:"
             ls -la "$bin_dir" || echo "Failed to list $bin_dir"
+            
+            # Check specific binaries
+            for binary in zsign ideviceinstaller; do
+              if [ -f "$bin_dir/$binary" ]; then
+                echo "Found $binary in $bin_dir"
+                chmod +x "$bin_dir/$binary"
+                file "$bin_dir/$binary"
+                
+                # Check if it runs
+                "$bin_dir/$binary" -v 2>&1 || echo "Failed to run $binary"
+              fi
+            done
             
             # Check dependencies of each binary
             echo "Checking dependencies in $bin_dir..."
@@ -556,8 +619,9 @@ jobs:
           done
           
           echo "Checking resources directory..."
-          ls -la dist/NeoSigner.app/Contents/Resources/resources/bin 2>/dev/null || echo "Resources/resources/bin not found"
-          ls -la dist/NeoSigner.app/Contents/MacOS/resources/bin 2>/dev/null || echo "MacOS/resources/bin not found"
+          ls -la dist/NeoSigner.app/Contents/Resources/bin 2>/dev/null || echo "Resources/bin not found"
+          ls -la dist/NeoSigner.app/Contents/MacOS/bin 2>/dev/null || echo "MacOS/bin not found"
+          ls -la dist/NeoSigner.app/Contents/Frameworks/bin 2>/dev/null || echo "Frameworks/bin not found"
           
           echo "Contents of app bundle:"
           find dist/NeoSigner.app -type f -name "*.py" | sort

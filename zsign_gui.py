@@ -138,6 +138,31 @@ class ZsignGUI:
         # Get home directory
         home_dir = os.path.expanduser("~")
         
+        # First check if we're running as a bundled app
+        if getattr(sys, 'frozen', False):
+            # Running as bundled app
+            bundle_dir = os.path.dirname(sys.executable)
+            bundled_paths = [
+                os.path.join(bundle_dir, 'bin', 'zsign'),
+                os.path.join(os.path.dirname(bundle_dir), 'Resources', 'bin', 'zsign'),
+                os.path.join(bundle_dir, 'resources', 'bin', 'zsign'),
+                os.path.join(os.path.dirname(bundle_dir), 'Resources', 'resources', 'bin', 'zsign'),
+                os.path.join(bundle_dir, 'Frameworks', 'bin', 'zsign'),
+            ]
+            
+            for path in bundled_paths:
+                if os.path.exists(path):
+                    # Check if it's executable
+                    if not os.access(path, os.X_OK):
+                        try:
+                            print(f"Making zsign executable: {path}")
+                            os.chmod(path, 0o755)
+                        except Exception as e:
+                            print(f"Failed to make zsign executable: {e}")
+                    
+                    print(f"Found bundled zsign at: {path}")
+                    return path
+        
         if sys.platform == "darwin":
             # macOS
             paths = [
@@ -201,15 +226,22 @@ class ZsignGUI:
         # Check if binary exists and is executable
         for path in paths:
             if os.path.exists(path):
-                if sys.platform != "win32":
-                    # On Unix-like systems, check if the file is executable
-                    if os.access(path, os.X_OK):
-                        print(f"Found zsign binary at: {path}")
-                        return path
-                else:
-                    # On Windows, just check if it exists
-                    print(f"Found zsign binary at: {path}")
-                    return path
+                # Check if file is executable, try to fix if not
+                if sys.platform != "win32" and not os.access(path, os.X_OK):
+                    try:
+                        print(f"Making zsign executable: {path}")
+                        os.chmod(path, 0o755)
+                    except Exception as e:
+                        print(f"Failed to make zsign executable: {e}")
+                        continue
+                
+                # Verify it's executable now
+                if sys.platform != "win32" and not os.access(path, os.X_OK):
+                    print(f"Warning: zsign at {path} is not executable")
+                    continue
+                    
+                print(f"Found zsign binary at: {path}")
+                return path
         
         return None
     
