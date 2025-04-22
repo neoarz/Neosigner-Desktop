@@ -121,34 +121,57 @@ class ZsignGUI:
         # Base directory is the directory containing this script
         base_dir = os.path.dirname(os.path.abspath(__file__))
         
+        # Get home directory
+        home_dir = os.path.expanduser("~")
+        
         if sys.platform == "darwin":
             # macOS
             paths = [
+                os.path.join(base_dir, "bin", "zsign"),                  # Local bin directory
                 os.path.join(base_dir, "zsign_exe"),
                 os.path.join(base_dir, "zsign/bin/zsign"),
                 os.path.join(base_dir, "build", "macos", "zsign"),
                 os.path.join(base_dir, "zsign"),
                 "/usr/local/bin/zsign",
+                "/opt/homebrew/bin/zsign",                               # Homebrew on Apple Silicon
+                os.path.join(home_dir, "zsign/bin/zsign"),               # User's home directory
+                os.path.join(home_dir, "bin/zsign"),
+                os.path.join(home_dir, ".local/bin/zsign"),
                 "/usr/local/zsign/bin/zsign",
-                "/Users/local/zsign/bin/zsign",
                 "/usr/local/bin/zsign",
                 "/usr/local/zsign/bin/zsign",
-                "/zsign/bin/zsign",
-                "/local/zsign/bin/zsign",
-                "/usr/local/bin/zsign/bin/zsign",
-                "/usr/zsign/bin/zsign",
-                "/Users/local/Desktop/zsign/bin/zsign"  # Add the correct full path
+                "/zsign/bin/zsign"
             ]
+            
+            # Try to run 'which zsign' to find it in PATH
+            try:
+                result = subprocess.run(["which", "zsign"], 
+                                      stdout=subprocess.PIPE, 
+                                      stderr=subprocess.PIPE,
+                                      text=True)
+                if result.returncode == 0 and result.stdout.strip():
+                    path = result.stdout.strip()
+                    if os.path.exists(path):
+                        paths.insert(0, path)  # Add to beginning of list
+            except:
+                pass
+                
         elif sys.platform.startswith("linux"):
             # Linux
             paths = [
+                os.path.join(base_dir, "bin", "zsign"),
                 os.path.join(base_dir, "build", "linux", "zsign"),
                 os.path.join(base_dir, "zsign"),
-                "/usr/local/bin/zsign"
+                os.path.join(home_dir, "zsign/bin/zsign"),
+                os.path.join(home_dir, "bin/zsign"),
+                os.path.join(home_dir, ".local/bin/zsign"),
+                "/usr/local/bin/zsign",
+                "/usr/bin/zsign"
             ]
         elif sys.platform == "win32":
             # Windows
             paths = [
+                os.path.join(base_dir, "bin", "zsign.exe"),
                 os.path.join(base_dir, "build", "windows", "vs2022", "x64", "Release", "zsign.exe"),
                 os.path.join(base_dir, "zsign.exe")
             ]
@@ -156,15 +179,22 @@ class ZsignGUI:
             # Unknown platform
             return None
         
+        # Print search paths to output for debugging
+        print(f"Searching for zsign binary in the following paths:")
+        for path in paths:
+            print(f"  - {path}")
+            
         # Check if binary exists and is executable
         for path in paths:
             if os.path.exists(path):
                 if sys.platform != "win32":
                     # On Unix-like systems, check if the file is executable
                     if os.access(path, os.X_OK):
+                        print(f"Found zsign binary at: {path}")
                         return path
                 else:
                     # On Windows, just check if it exists
+                    print(f"Found zsign binary at: {path}")
                     return path
         
         return None
