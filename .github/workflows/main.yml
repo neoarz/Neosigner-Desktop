@@ -404,26 +404,42 @@ jobs:
         run: |
           cat > iPASideloader.spec << EOF
           # -*- mode: python ; coding: utf-8 -*-
+          import os
 
           block_cipher = None
+
+          # Define binary files to include
+          binary_files = []
+          
+          # Add zsign binary
+          if os.path.exists('bin/zsign'):
+              binary_files.append(('bin/zsign', 'bin'))
+          elif os.path.exists('./zsign'):
+              binary_files.append(('./zsign', 'bin'))
+          
+          # Add utility binaries if they exist
+          for util in ['ideviceinstaller', 'idevice_id', 'ideviceinfo', 'idevicename']:
+              if os.path.exists(f'resources/bin/{util}'):
+                  binary_files.append((f'resources/bin/{util}', 'bin'))
+          
+          # Data files to include
+          data_files = [
+              ('zsign_gui.py', '.'),
+          ]
+          
+          # Add shared libraries
+          import glob
+          for lib_pattern in ['resources/bin/*.dylib', 'resources/bin/*.so*']:
+              for lib_file in glob.glob(lib_pattern):
+                  if os.path.isfile(lib_file):
+                      lib_name = os.path.basename(lib_file)
+                      data_files.append((lib_file, 'bin'))
 
           a = Analysis(
               ['app_launcher.py'],
               pathex=[],
-              binaries=[
-                  # Add zsign binary directly to ensure it gets properly included
-                  ('bin/zsign', 'bin'),
-                  # Add any other binaries from resources/bin to bin directly
-                  ('resources/bin/ideviceinstaller', 'bin') if os.path.exists('resources/bin/ideviceinstaller') else None,
-                  ('resources/bin/idevice_id', 'bin') if os.path.exists('resources/bin/idevice_id') else None,
-                  ('resources/bin/ideviceinfo', 'bin') if os.path.exists('resources/bin/ideviceinfo') else None,
-                  ('resources/bin/idevicename', 'bin') if os.path.exists('resources/bin/idevicename') else None,
-              ],
-              datas=[
-                  ('resources/bin/*.dylib', 'bin'),
-                  ('resources/bin/*.so*', 'bin'),
-                  ('zsign_gui.py', '.'),
-              ],
+              binaries=binary_files,
+              datas=data_files,
               hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext'],
               hookspath=[],
               hooksconfig={},
@@ -434,6 +450,7 @@ jobs:
               cipher=block_cipher,
               noarchive=False,
           )
+          
           pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
           exe = EXE(
@@ -474,27 +491,70 @@ jobs:
           )
           EOF
       
+      - name: Verify file structure before building
+        run: |
+          echo "Current directory structure:"
+          pwd
+          ls -la
+          
+          echo "bin directory:"
+          ls -la bin || echo "bin directory not found"
+          
+          echo "resources/bin directory:"
+          ls -la resources/bin || echo "resources/bin directory not found"
+          
+          echo "Ensuring zsign binary is available in multiple locations for PyInstaller to find"
+          # Make sure zsign is in the expected locations
+          if [ -f "bin/zsign" ]; then
+            echo "zsign exists in bin/"
+            # Also copy to current directory for safety
+            cp bin/zsign ./zsign
+            chmod +x ./zsign
+          else
+            echo "WARNING: zsign not found in bin/"
+            # Check in build directory
+            if [ -f "zsign/build/macos/zsign" ]; then
+              echo "Found zsign in build directory, copying to multiple locations"
+              cp zsign/build/macos/zsign ./zsign
+              chmod +x ./zsign
+              cp zsign/build/macos/zsign bin/
+              chmod +x bin/zsign
+            else
+              echo "ERROR: zsign binary not found in expected locations!"
+              find . -name zsign -type f
+            fi
+          fi
+      
       - name: Build macOS app
         run: |
+          # Debug - print inputs to PyInstaller
+          echo "Inputs for PyInstaller:"
+          ls -la app_launcher.py zsign_gui.py bin/zsign
+          
+          # Run PyInstaller with the spec file
           pyinstaller --clean iPASideloader.spec
       
       - name: Verify app structure
         run: |
           echo "Checking app structure..."
-          find dist/iPASideloader.app -type d | sort
           
           echo "Looking for zsign in the app bundle..."
           find dist/iPASideloader.app -name zsign -type f | xargs ls -la || echo "zsign not found in app bundle"
           
-          echo "Checking resources directory..."
-          ls -la dist/iPASideloader.app/Contents/Resources/resources/bin || echo "Resources/resources/bin not found"
-          ls -la dist/iPASideloader.app/Contents/MacOS/resources/bin || echo "MacOS/resources/bin not found"
+          # Check bin directories
+          echo "Checking bin directories in app bundle:"
+          find dist/iPASideloader.app -path "*/bin" -type d | while read bin_dir; do
+            echo "Contents of $bin_dir:"
+            ls -la "$bin_dir"
+          done
           
-          echo "Contents of app bundle:"
-          find dist/iPASideloader.app -type f -name "*.py" | sort
+          # Find all binary files
+          echo "All executable files in app bundle:"
+          find dist/iPASideloader.app -type f -perm +111 | grep -v "__pycache__" | sort
           
-          echo "Checking if app launcher is properly included..."
-          cat dist/iPASideloader.app/Contents/MacOS/iPASideloader || echo "Could not find app launcher"
+          # Find all Python files
+          echo "Python files in app bundle:"
+          find dist/iPASideloader.app -name "*.py" | sort
       
       - name: Ensure binaries are properly included
         run: |
