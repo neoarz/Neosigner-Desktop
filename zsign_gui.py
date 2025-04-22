@@ -7,7 +7,7 @@ from tkinter import ttk, filedialog, scrolledtext, messagebox
 class ZsignGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("iOS App Signer")
+        self.root.title("NeoSigner")
         self.root.geometry("800x600")
         
         # Get the path to the zsign executable

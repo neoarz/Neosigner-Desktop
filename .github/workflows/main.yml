@@ -337,7 +337,7 @@ jobs:
       
       - name: Create simplified PyInstaller spec file
         run: |
-          cat > iPASideloader.spec << EOF
+          cat > NeoSigner.spec << EOF
           # -*- mode: python ; coding: utf-8 -*-
 
           block_cipher = None
@@ -368,7 +368,7 @@ jobs:
               a.scripts,
               [],
               exclude_binaries=True,
-              name='iPASideloader',
+              name='NeoSigner',
               debug=False,
               bootloader_ignore_signals=False,
               strip=False,
@@ -389,18 +389,18 @@ jobs:
               strip=False,
               upx=True,
               upx_exclude=[],
-              name='iPASideloader',
+              name='NeoSigner',
           )
           app = BUNDLE(
               coll,
-              name='iPASideloader.app',
-              bundle_identifier='com.neoarz.ipasideloader',
+              name='NeoSigner.app',
+              bundle_identifier='com.neoarz.neosigner',
               icon='app_icon.icns',
               info_plist={
                   'CFBundleShortVersionString': '1.0.0',
-                  'CFBundleName': 'iPASideloader',
-                  'CFBundleDisplayName': 'iPASideloader',
-                  'CFBundleExecutable': 'iPASideloader',
+                  'CFBundleName': 'NeoSigner',
+                  'CFBundleDisplayName': 'NeoSigner',
+                  'CFBundleExecutable': 'NeoSigner',
                   'CFBundleVersion': '1.0.0',
                   'NSHighResolutionCapable': True,
                   'NSRequiresAquaSystemAppearance': False,
@@ -413,25 +413,25 @@ jobs:
       
       - name: Build macOS app
         run: |
-          pyinstaller --clean iPASideloader.spec
+          pyinstaller --clean NeoSigner.spec
       
       - name: Verify app structure
         run: |
           echo "Checking app structure..."
-          find dist/iPASideloader.app -type d | sort
+          find dist/NeoSigner.app -type d | sort
           
           echo "Looking for zsign in the app bundle..."
-          find dist/iPASideloader.app -name zsign -type f | xargs ls -la || echo "zsign not found in app bundle"
+          find dist/NeoSigner.app -name zsign -type f | xargs ls -la || echo "zsign not found in app bundle"
           
           echo "Checking resources directory..."
-          ls -la dist/iPASideloader.app/Contents/Resources/resources/bin || echo "Resources/resources/bin not found"
-          ls -la dist/iPASideloader.app/Contents/MacOS/resources/bin || echo "MacOS/resources/bin not found"
+          ls -la dist/NeoSigner.app/Contents/Resources/resources/bin || echo "Resources/resources/bin not found"
+          ls -la dist/NeoSigner.app/Contents/MacOS/resources/bin || echo "MacOS/resources/bin not found"
           
           echo "Contents of app bundle:"
-          find dist/iPASideloader.app -type f -name "*.py" | sort
+          find dist/NeoSigner.app -type f -name "*.py" | sort
           
           echo "Checking if app launcher is properly included..."
-          cat dist/iPASideloader.app/Contents/MacOS/iPASideloader || echo "Could not find app launcher"
+          cat dist/NeoSigner.app/Contents/MacOS/NeoSigner || echo "Could not find app launcher"
       
       - name: Get version from tag
         id: get_version
@@ -472,7 +472,7 @@ jobs:
                   # Fall back to default
                   font = ImageFont.load_default()
                   
-              draw.text((width/2, height/2 - 50), "iPASideloader", font=font, fill=(40, 40, 40), anchor="mm")
+              draw.text((width/2, height/2 - 50), "NeoSigner", font=font, fill=(40, 40, 40), anchor="mm")
               
               font_size = 16
               try:
@@ -494,7 +494,7 @@ jobs:
           mkdir -p dmg_contents
           
           # Copy the app to the temporary directory
-          cp -R dist/iPASideloader.app dmg_contents/
+          cp -R dist/NeoSigner.app dmg_contents/
           
           # Create a symbolic link to /Applications
           ln -s /Applications dmg_contents/Applications
@@ -502,32 +502,32 @@ jobs:
           # Create the DMG
           VERSION=${{ steps.get_version.outputs.VERSION }}
           create-dmg \
-            --volname "iPASideloader" \
+            --volname "NeoSigner" \
             --volicon "app_icon.icns" \
             --background "dmg_background.png" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
-            --icon "iPASideloader.app" 150 190 \
+            --icon "NeoSigner.app" 150 190 \
             --icon "Applications" 450 190 \
-            --hide-extension "iPASideloader.app" \
+            --hide-extension "NeoSigner.app" \
             --app-drop-link 450 190 \
-            "iPASideloader-$VERSION.dmg" \
+            "NeoSigner-$VERSION.dmg" \
             "dmg_contents/"
           
           # Verify the DMG was created
-          ls -la iPASideloader-$VERSION.dmg
+          ls -la NeoSigner-$VERSION.dmg
       
       - name: Upload app as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iPASideloader-${{ steps.get_version.outputs.VERSION }}
-          path: iPASideloader-${{ steps.get_version.outputs.VERSION }}.dmg
+          name: NeoSigner-${{ steps.get_version.outputs.VERSION }}
+          path: NeoSigner-${{ steps.get_version.outputs.VERSION }}.dmg
       
       - name: Create Release and Upload Asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: iPASideloader-${{ steps.get_version.outputs.VERSION }}.dmg
+          files: NeoSigner-${{ steps.get_version.outputs.VERSION }}.dmg
           draft: false
           prerelease: false 
