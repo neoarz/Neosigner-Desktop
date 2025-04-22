@@ -135,6 +135,7 @@ jobs:
           import subprocess
           import tkinter as tk
           from tkinter import messagebox
+          import shutil
           
           # Get the application path
           if getattr(sys, 'frozen', False):
@@ -153,10 +154,17 @@ jobs:
                   if os.path.exists(path) and os.path.isdir(path):
                       bin_path = path
                       break
+              
+              # If no bin path found, create one
+              if bin_path is None:
+                  bin_path = os.path.join(application_path, 'bin')
+                  os.makedirs(bin_path, exist_ok=True)
           else:
               # Running as a script
               application_path = os.path.dirname(os.path.abspath(__file__))
-              bin_path = os.path.join(application_path, 'resources', 'bin')
+              bin_path = os.path.join(application_path, 'bin')
+              if not os.path.exists(bin_path):
+                  bin_path = os.path.join(application_path, 'resources', 'bin')
           
           print(f"Application path: {application_path}")
           print(f"Selected bin path: {bin_path}")
@@ -207,26 +215,70 @@ jobs:
               messagebox.showerror("Error", f"Failed to import zsign_gui: {e}")
               sys.exit(1)
           
+          # Define a function to find zsign binary
+          def find_zsign_binary():
+              # First check if zsign is in the bin path
+              zsign_path = os.path.join(bin_path, "zsign")
+              if os.path.exists(zsign_path) and os.access(zsign_path, os.X_OK):
+                  return zsign_path
+                  
+              # Check if zsign is in PATH
+              try:
+                  zsign_in_path = shutil.which("zsign")
+                  if zsign_in_path:
+                      return zsign_in_path
+              except:
+                  pass
+                  
+              # Look in common locations
+              search_paths = [
+                  os.path.join(application_path, "zsign"),
+                  os.path.join(application_path, "zsign_exe"),
+                  os.path.join(application_path, "resources", "bin", "zsign"),
+                  "/usr/local/bin/zsign",
+              ]
+              
+              for path in search_paths:
+                  if os.path.exists(path) and os.access(path, os.X_OK):
+                      return path
+                      
+              return None
+          
           # Check if zsign is available
           try:
-              zsign_path = None
-              if bin_path:
-                  zsign_path = os.path.join(bin_path, "zsign")
-                  if os.path.exists(zsign_path):
-                      print(f"Found zsign at: {zsign_path}")
-                  else:
-                      print(f"zsign not found at expected path: {zsign_path}")
+              zsign_path = find_zsign_binary()
               
-              # Try to run zsign to verify it works
-              result = subprocess.run(["zsign", "-v"], 
+              if zsign_path:
+                  print(f"Found zsign at: {zsign_path}")
+                  
+                  # If zsign isn't in bin_path, copy it there
+                  if not os.path.exists(os.path.join(bin_path, "zsign")):
+                      try:
+                          dest_path = os.path.join(bin_path, "zsign")
+                          shutil.copy2(zsign_path, dest_path)
+                          os.chmod(dest_path, 0o755)
+                          print(f"Copied zsign to bin directory: {dest_path}")
+                      except Exception as e:
+                          print(f"Error copying zsign: {e}")
+                  
+                  # Verify zsign works
+                  result = subprocess.run([zsign_path, "-v"], 
                                       stdout=subprocess.PIPE, 
                                       stderr=subprocess.PIPE, 
-                                      text=True,
-                                      env=os.environ)
-              print(f"zsign version check result: {result.returncode}")
-              print(f"zsign output: {result.stdout}")
-              if result.stderr:
-                  print(f"zsign stderr: {result.stderr}")
+                                      text=True)
+                  print(f"zsign version check result: {result.returncode}")
+                  print(f"zsign output: {result.stdout}")
+                  if result.stderr:
+                      print(f"zsign stderr: {result.stderr}")
+              else:
+                  print("Warning: zsign binary not found!")
+                  if getattr(sys, 'frozen', False):
+                      tk.Tk().withdraw()
+                      messagebox.showwarning(
+                          "Missing zsign", 
+                          "The zsign binary was not found. The app may not function correctly. "
+                          "Please use setup.sh to rebuild the application."
+                      )
           except Exception as e:
               print(f"Error checking zsign: {e}")
           
@@ -247,6 +299,107 @@ jobs:
                   sys.exit(1)
           EOF
       
+      - name: Patch zsign_gui.py to improve binary detection
+        run: |
+          # Use sed to modify the find_zsign_binary method in zsign_gui.py
+          cat > patch_zsign_gui.py << 'EOF'
+          #!/usr/bin/env python3
+          import os
+          import re
+          
+          # Read the file
+          with open('zsign_gui.py', 'r') as f:
+              content = f.read()
+          
+          # Define the improved find_zsign_binary method
+          new_find_zsign_binary = """    def find_zsign_binary(self):
+              # Base directory is the directory containing this script
+              base_dir = os.path.dirname(os.path.abspath(__file__))
+              
+              # Check if we're running as bundled app
+              if getattr(sys, 'frozen', False):
+                  # Running as a bundled executable
+                  application_path = os.path.dirname(sys.executable)
+                  
+                  # Check in MacOS/bin directory first (highest priority)
+                  macos_bin_path = os.path.join(application_path, 'bin', 'zsign')
+                  if os.path.exists(macos_bin_path) and os.access(macos_bin_path, os.X_OK):
+                      return macos_bin_path
+                      
+                  # Then check in Resources/bin
+                  resources_bin_path = os.path.join(os.path.dirname(application_path), 'Resources', 'bin', 'zsign')
+                  if os.path.exists(resources_bin_path) and os.access(resources_bin_path, os.X_OK):
+                      return resources_bin_path
+              
+              # Standard search paths
+              if sys.platform == "darwin":
+                  # macOS
+                  paths = [
+                      os.path.join(base_dir, "bin", "zsign"),
+                      os.path.join(base_dir, "zsign_exe"),
+                      os.path.join(base_dir, "zsign/bin/zsign"),
+                      os.path.join(base_dir, "build", "macos", "zsign"),
+                      os.path.join(base_dir, "zsign"),
+                      "/usr/local/bin/zsign",
+                      "/usr/local/zsign/bin/zsign",
+                      "/Users/local/zsign/bin/zsign",
+                      "/usr/local/bin/zsign",
+                      "/usr/local/zsign/bin/zsign",
+                      "/zsign/bin/zsign",
+                      "/local/zsign/bin/zsign",
+                      "/usr/local/bin/zsign/bin/zsign",
+                      "/usr/zsign/bin/zsign",
+                      "/Users/local/Desktop/zsign/bin/zsign"
+                  ]
+              elif sys.platform.startswith("linux"):
+                  # Linux
+                  paths = [
+                      os.path.join(base_dir, "build", "linux", "zsign"),
+                      os.path.join(base_dir, "zsign"),
+                      "/usr/local/bin/zsign"
+                  ]
+              elif sys.platform == "win32":
+                  # Windows
+                  paths = [
+                      os.path.join(base_dir, "build", "windows", "vs2022", "x64", "Release", "zsign.exe"),
+                      os.path.join(base_dir, "zsign.exe")
+                  ]
+              else:
+                  # Unknown platform
+                  return None
+              
+              # Check if binary exists and is executable
+              for path in paths:
+                  if os.path.exists(path):
+                      if sys.platform != "win32":
+                          # On Unix-like systems, check if the file is executable
+                          if os.access(path, os.X_OK):
+                              return path
+                      else:
+                          # On Windows, just check if it exists
+                          return path
+              
+              return None"""
+          
+          # Replace the find_zsign_binary method
+          content_modified = re.sub(
+              r'def find_zsign_binary\(self\):.*?return None',
+              new_find_zsign_binary,
+              content,
+              flags=re.DOTALL
+          )
+          
+          # Write back to the file
+          with open('zsign_gui.py', 'w') as f:
+              f.write(content_modified)
+          
+          print("Updated zsign_gui.py with improved binary detection")
+          EOF
+          
+          # Make the script executable and run it
+          chmod +x patch_zsign_gui.py
+          python3 patch_zsign_gui.py
+      
       - name: Create simplified PyInstaller spec file
         run: |
           cat > iPASideloader.spec << EOF
@@ -257,9 +410,18 @@ jobs:
           a = Analysis(
               ['app_launcher.py'],
               pathex=[],
-              binaries=[],
+              binaries=[
+                  # Add zsign binary directly to ensure it gets properly included
+                  ('bin/zsign', 'bin'),
+                  # Add any other binaries from resources/bin to bin directly
+                  ('resources/bin/ideviceinstaller', 'bin') if os.path.exists('resources/bin/ideviceinstaller') else None,
+                  ('resources/bin/idevice_id', 'bin') if os.path.exists('resources/bin/idevice_id') else None,
+                  ('resources/bin/ideviceinfo', 'bin') if os.path.exists('resources/bin/ideviceinfo') else None,
+                  ('resources/bin/idevicename', 'bin') if os.path.exists('resources/bin/idevicename') else None,
+              ],
               datas=[
-                  ('resources/bin', 'bin'),
+                  ('resources/bin/*.dylib', 'bin'),
+                  ('resources/bin/*.so*', 'bin'),
                   ('zsign_gui.py', '.'),
               ],
               hiddenimports=['tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.scrolledtext'],
@@ -334,6 +496,56 @@ jobs:
           echo "Checking if app launcher is properly included..."
           cat dist/iPASideloader.app/Contents/MacOS/iPASideloader || echo "Could not find app launcher"
       
+      - name: Ensure binaries are properly included
+        run: |
+          # Create bin directory in the app bundle if it doesn't exist
+          mkdir -p dist/iPASideloader.app/Contents/MacOS/bin
+          
+          echo "Copying zsign binary to multiple locations to ensure it's found..."
+          
+          # Copy zsign to the app bundle
+          if [ -f "bin/zsign" ]; then
+            echo "Copying zsign to app bundle bin directory..."
+            cp bin/zsign dist/iPASideloader.app/Contents/MacOS/bin/
+            chmod +x dist/iPASideloader.app/Contents/MacOS/bin/zsign
+            
+            # Also copy to Resources directory as a fallback
+            mkdir -p dist/iPASideloader.app/Contents/Resources/bin
+            cp bin/zsign dist/iPASideloader.app/Contents/Resources/bin/
+            chmod +x dist/iPASideloader.app/Contents/Resources/bin/zsign
+          else
+            echo "WARNING: zsign binary not found in bin directory!"
+          fi
+          
+          # Copy ideviceinstaller and other utilities if they exist
+          for util in ideviceinstaller idevice_id ideviceinfo idevicename; do
+            if [ -f "resources/bin/$util" ]; then
+              echo "Copying $util to app bundle..."
+              cp "resources/bin/$util" dist/iPASideloader.app/Contents/MacOS/bin/
+              chmod +x dist/iPASideloader.app/Contents/MacOS/bin/$util
+              
+              # Also copy to Resources
+              cp "resources/bin/$util" dist/iPASideloader.app/Contents/Resources/bin/
+              chmod +x dist/iPASideloader.app/Contents/Resources/bin/$util
+            fi
+          done
+          
+          # Copy shared libraries
+          echo "Copying shared libraries..."
+          for lib in resources/bin/*.dylib resources/bin/*.so*; do
+            if [ -f "$lib" ]; then
+              echo "Copying $lib to app bundle..."
+              cp "$lib" dist/iPASideloader.app/Contents/MacOS/bin/
+              
+              # Also copy to Resources
+              cp "$lib" dist/iPASideloader.app/Contents/Resources/bin/
+            fi
+          done
+          
+          echo "Final app bundle bin directory contents:"
+          ls -la dist/iPASideloader.app/Contents/MacOS/bin/
+          ls -la dist/iPASideloader.app/Contents/Resources/bin/
+      
       - name: Create zip of app
         run: |
           cd dist
@@ -368,4 +580,4 @@ jobs:
         with:
           files: iPASideloader-${{ steps.get_version.outputs.VERSION }}.zip
           draft: false
-          prerelease: false 
+          prerelease: false
