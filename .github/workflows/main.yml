@@ -405,7 +405,7 @@ jobs:
                   'NSHighResolutionCapable': True,
                   'NSRequiresAquaSystemAppearance': False,
                   'LSApplicationCategoryType': 'public.app-category.developer-tools',
-                  'NSHumanReadableCopyright': 'Copyright © 2023',
+                  'NSHumanReadableCopyright': 'Copyright © 2025',
                   'LSMinimumSystemVersion': '10.14.0'
               },
           )
